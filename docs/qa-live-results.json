@@ -1,0 +1,43 @@
+{
+  "firstRowMs": 3669,
+  "board": {
+    "cards": 89,
+    "columns": [
+      "29",
+      "30",
+      "30"
+    ],
+    "status": "Reconnecting to pump.fun…"
+  },
+  "token": {
+    "title": "$SQUAD · Nought",
+    "chart": 7,
+    "body": "SQ\nSQUAD\nSQUAD\nH9Zc…RTwM\n2m\nMETEORA DBC\nMIGRATED\nMARKET CAP\n$13.9K\n-76.8% 1h\nPRICE\n$0.0₄1395\nLIQUIDITY\n$1.3K\nHOLDERS\n168\nATH\n$106.4K -87%\nInstant\n5m\n1h\n6h\n24h\nVolume\n$17.0K\nBuys\n356 $8.8K\nSells\n461 $8.2K\nNet\n+$589\nTraders\n185\nNet buyers\n+69\nOrganic\n$0\n52% buy · 48% sell\n1s\n15s\n30s\n1m\n5m\n15m\n1h\n4h\n1d\nMC\nPrice\nUSD\nSOL\nVol\nSMA 20\nEMA 50\nLatest\nO $48.75K\nH $106.4K\nL $8.503K\nC $9.355K\n-80.81%\nV $9.8K\n\t\n\t\n\n\t\n\t\nBuy\nSell\nMarket\nLimit\nAdv.\nP1\nP2\nP3\nAmount\nNo wallet\nSOL\n0.01\n0.1\n1\n10\n✎\nP1 · 15% slippage · Fast priority\nEdit presets\nYou get about\n1.34M $SQUAD\nValue\n$12.12\nMinimum received\n1.14M $SQUAD\nPrice impact\n<0.01%\nRoute\nMeteora DAMM v2\nSlippage\n15.0%\nNought fee\n0%\nPool and launchpad fees\nincluded in the quoted price\nin price\nPriority fee\nat most (Fast)\n≤ 0.00200 SOL\nNetwork fee\n0.000005 SOL\nThin liquidity ($1.3K): the price can jump and fills can miss.\nConnect a wallet to trade\nNought never holds your funds. Your wallet signs every trade.\nPOSITION\nConnect a wallet to see what you hold.\nAudit\nThresholds\nTOP 10\n1.7%\nof supply\nDEV HOLDS\n0.00%\n7PjT…vYJm\nSNIPERS\n0.0%\nearly snipers\nINSIDERS\n0.0%\ninsiders\nCLUSTERS\n0.0%\nnone found\nLIQUIDITY\n—\nchecking soon\nHOLDERS\n168\n+2300 in 1h\nORGANIC\n0\nlow\nDEX PAID\nNo\nprofile or ads\nMint authority\nRevoked\nFreeze authority\nRevoked\nCoin\nH9ZcM…ARTwM\nCreator\n7PjT2…CvYJm\nJupiter Shield\nThis token is not verified, make sure the mint address is correct before trading\nThis token has low organic activity\nThis token is newly listed\nBundle check HEURISTIC\nRead further back\n17 same-second buy groups · 62 wallets · 13.79 SOL · those wallets hold 3.04% now (counting top-100 holders)\n16:20:18 4 wallets · 1.72 SOL AB8…u2jBu5…t9dCxS…EKi5pb…rZW\n16:20:20 9 wallets · 1.58 SOL 8Ca…NfU5Mq…2kFJ8w…apKAH5…RSv\n16:20:24 5 wallets · 0.410 SOL AL8…wCoHgN…KUpCsC…cj8DPP…1G5\n"
+  },
+  "quote": {
+    "ok": true,
+    "inputAmount": "10000000",
+    "outputAmount": "1211764",
+    "platformFee": null,
+    "routes": 1
+  },
+  "mobileOverflow": false,
+  "errors": [],
+  "responses": [
+    {
+      "host": "pump.mypinata.cloud",
+      "status": 403,
+      "path": "/ipfs/QmTxi1KDAqi9rKVJE811DJpUZbvox8kHWMjrHiTC9dr29f"
+    },
+    {
+      "host": "pump.mypinata.cloud",
+      "status": 403,
+      "path": "/ipfs/Qma5Chn3pep9EHUTd2K9YEYPutezrrGzqMAB4Usi4ZgPSd"
+    },
+    {
+      "host": "pump.mypinata.cloud",
+      "status": 403,
+      "path": "/ipfs/Qma5Chn3pep9EHUTd2K9YEYPutezrrGzqMAB4Usi4ZgPSd"
+    }
+  ]
+}

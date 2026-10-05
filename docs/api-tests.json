@@ -1,0 +1,1509 @@
+[
+ {
+  "results": [
+   {
+    "need": "Perp market list + live stats (mark, funding, OI, 24h volume, max leverage) for an Axiom-style perps screener",
+    "endpoint": "POST https://api.hyperliquid.xyz/info  body {\"type\":\"metaAndAssetCtxs\"}  (Content-Type: application/json)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No rate-limit headers returned. Hyperliquid docs: REST limit is per IP, 1200 weight/min; metaAndAssetCtxs is weight 20 (~60 calls/min max). Per-IP means each browser user has their own budget on a static site.",
+    "sample_fields": "Response is a 2-element array [meta, ctxs]. meta.universe[i] = {name:\"SOL\", szDecimals:2, maxLeverage:20, marginTableId:54, isDelisted?:true}; meta.marginTables, meta.collateralToken. ctxs[i] (same index as universe[i]) = {markPx:\"119.59\", midPx:\"119.585\", oraclePx:\"119.6465\", prevDayPx:\"120.18\", funding:\"0.0000115583\" (hourly rate), openInterest:\"5466158.1\" (in coin units), dayNtlVlm:\"164780716.9\" (USD 24h vol), dayBaseVlm, premium, impactPxs:[bid,ask]}. All numbers are strings.",
+    "notes": "HTTP 200, 72 KB, ~1.4s. Access-Control-Allow-Origin: * (plus access-control-expose-headers: *). 234 perps in universe, 56 flagged isDelisted, so filter those. 24h change = markPx/prevDayPx-1. OI in USD = openInterest*markPx. Live values seen: BTC mark 84765, ETH 2680.3, SOL 119.59, HYPE 88.723."
+   },
+   {
+    "need": "Live mid prices for all markets (cheap price ticker)",
+    "endpoint": "POST https://api.hyperliquid.xyz/info  body {\"type\":\"allMids\"}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Docs: weight 2 (cheap). For live ticking, use the websocket allMids subscription instead of polling.",
+    "sample_fields": "Flat object {coin: midString}, e.g. {\"BTC\":\"84766.5\",\"SOL\":\"119.585\",...}. 1205 keys: perp names like \"SOL\", spot pairs as \"@<spotIndex>\" (368 of them, resolve via spotMeta), and \"#<id>\" keys that are non-perp outcome-style markets.",
+    "notes": "HTTP 200, 21 KB, ~0.9s, ACAO: *. Filter to keys that appear in metaAndAssetCtxs universe to get perps only."
+   },
+   {
+    "need": "CORS preflight (needed because the API requires Content-Type: application/json, which is not a simple request)",
+    "endpoint": "OPTIONS https://api.hyperliquid.xyz/info and OPTIONS https://api.hyperliquid.xyz/exchange, with Origin https://example.com, Access-Control-Request-Method POST, Access-Control-Request-Headers content-type",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "200 OK; access-control-allow-origin: *; access-control-allow-methods: *; access-control-allow-headers: *",
+    "notes": "The preflight passes on both /info and /exchange. Sending text/plain to skip the preflight does NOT work: you get HTTP 415 'Expected request with Content-Type: application/json'. So browsers must use application/json, which is fine because the preflight is allowed."
+   },
+   {
+    "need": "Order book depth for a perp trade panel",
+    "endpoint": "POST /info {\"type\":\"l2Book\",\"coin\":\"SOL\"}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Docs: weight 2",
+    "sample_fields": "{coin, time, levels:[bids[], asks[]]}, each level {px:\"119.61\", sz:\"1033.85\", n:16}. Up to 20 levels per side.",
+    "notes": "HTTP 200, ~1.5 KB. Optional nSigFigs/mantissa params aggregate levels. The websocket l2Book subscription is better for live updates."
+   },
+   {
+    "need": "OHLCV candles for perp charts (TradingView/lightweight-charts)",
+    "endpoint": "POST /info {\"type\":\"candleSnapshot\",\"req\":{\"coin\":\"SOL\",\"interval\":\"1h\",\"startTime\":<ms>,\"endTime\":<ms>}}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Docs: weight 20, plus extra weight per 60 candles returned. Only the most recent 5000 candles are available.",
+    "sample_fields": "Array of {t:openMs, T:closeMs, s:\"SOL\", i:\"1h\", o, h, l, c, v (base volume), n (trade count)}; all prices are strings",
+    "notes": "Returned 4 hourly SOL candles (o 119.26, c 119.41, ...). Intervals: 1m 3m 5m 15m 30m 1h 2h 4h 8h 12h 1d 3d 1w 1M. The websocket candle subscription gives live bars."
+   },
+   {
+    "need": "Funding rate history and predicted funding (with Binance/Bybit comparison)",
+    "endpoint": "POST /info {\"type\":\"fundingHistory\",\"coin\":\"SOL\",\"startTime\":<ms>}  and  {\"type\":\"predictedFundings\"}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Docs: weight 20 each",
+    "sample_fields": "fundingHistory: [{coin, fundingRate:\"0.0000045\", premium, time}] (hourly). predictedFundings: [[coin, [[\"HlPerp\",{fundingRate, nextFundingTime, fundingIntervalHours:1}],[\"BinPerp\",{...,fundingIntervalHours:4}],[\"BybitPerp\",{...}]]]]",
+    "notes": "Both returned 200 with ACAO: *. predictedFundings is 64 KB and covers all coins."
+   },
+   {
+    "need": "Builder-deployed (HIP-3) perp dexes, e.g. tokenized stocks",
+    "endpoint": "POST /info {\"type\":\"perpDexs\"}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Docs: weight 20",
+    "sample_fields": "[null, {name:\"xyz\", fullName:\"XYZ\", deployer, oracleUpdater, feeRecipient, assetToStreamingOiCap:[[\"xyz:AAPL\",\"200000000.0\"],...]}, ...]. index 0 = null = the main dex.",
+    "notes": "Extra markets such as xyz:AAPL, xyz:AMD and xyz:ALUMINIUM. To get their contexts, pass a dex name to metaAndAssetCtxs ({\"type\":\"metaAndAssetCtxs\",\"dex\":\"xyz\"}); that call itself was not tested."
+   },
+   {
+    "need": "A user's perp positions, margin, and open orders (portfolio/positions tab)",
+    "endpoint": "POST /info {\"type\":\"clearinghouseState\",\"user\":\"0x...\"}  and  {\"type\":\"openOrders\",\"user\":\"0x...\"}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Docs: clearinghouseState weight 2; openOrders weight 20",
+    "sample_fields": "clearinghouseState: {marginSummary:{accountValue, totalNtlPos, totalRawUsd, totalMarginUsed}, crossMarginSummary, crossMaintenanceMarginUsed, withdrawable, assetPositions:[{position:{coin, szi, entryPx, unrealizedPnl, leverage, liquidationPx, ...}}], time}. openOrders: [] or [{coin, side, limitPx, sz, oid, timestamp}]",
+    "notes": "Works with any 0x EVM address and needs no signature, so all account data is public. Sending the Solana wallet 9akUAsfojYqigRJSyxGJbvjjbnSBwEusr8Hroh3qZp7t gives HTTP 422 'Failed to deserialize the JSON body'. Hyperliquid accounts are EVM addresses only, so a Solana wallet cannot be looked up. The pump.fun mint, pumpswap pool and SOL mint have no meaning on Hyperliquid either. Related calls not tested here: userFills, userFunding, historicalOrders, frontendOpenOrders."
+   },
+   {
+    "need": "Spot token metadata (to resolve @N keys in allMids)",
+    "endpoint": "POST /info {\"type\":\"spotMeta\"}  (spotMetaAndAssetCtxs also exists)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Docs: weight 20",
+    "sample_fields": "{universe:[{tokens:[1,0], name:\"PURR/USDC\" or \"@1\", index, isCanonical}], tokens:[{name, szDecimals, weiDecimals, index, tokenId, ...}]}",
+    "notes": "137 KB response. The \"@N\" key in allMids is universe[N]; get the readable name from tokens[universe[N].tokens[0]].name."
+   },
+   {
+    "need": "Real-time streaming (ticker, trades tape, book, candles, user fills) without polling",
+    "endpoint": "wss://api.hyperliquid.xyz/ws, sending {\"method\":\"subscribe\",\"subscription\":{\"type\":\"allMids\"}} or {\"type\":\"trades\",\"coin\":\"SOL\"} (also l2Book, candle, bbo, activeAssetCtx, userFills, userEvents, orderUpdates)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Docs: per IP, max 100 connections, 1000 subscriptions and 2000 messages sent per minute. Send {\"method\":\"ping\"} roughly every 50s to stay connected.",
+    "sample_fields": "{channel:\"subscriptionResponse\",...}; {channel:\"trades\", data:[{coin:\"SOL\", side:\"B\", px:\"119.59\", sz:\"2.2\", time, tid, users:[buyer,seller]}]}; {channel:\"allMids\", data:{mids:{...}}}",
+    "notes": "Upgrade handshake with Origin https://example.com returned 101 Switching Protocols and access-control-allow-origin: *. A Node 26 native WebSocket client subscribed and got live SOL trades and allMids. Browsers do not apply CORS to WebSockets anyway, so this is safe to use from a static site."
+   },
+   {
+    "need": "Placing, cancelling and leverage changes on perps from the browser (trade submission endpoint)",
+    "endpoint": "POST https://api.hyperliquid.xyz/exchange  body {action, nonce, signature:{r,s,v}, vaultAddress?, expiresAfter?}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "Docs: per address, 1 request per 1 USDC traded (cumulative) plus a 10,000 starting buffer; when exhausted, 1 request per 10s. Per IP, an order or cancel batch weighs 1 + floor(batchLength/40).",
+    "sample_fields": "Success: {status:\"ok\", response:{type:\"order\", data:{statuses:[{resting:{oid}} | {filled:{totalSz, avgPx, oid}} | {error:\"...\"}]}}}",
+    "notes": "No orders were placed. Only an empty {} body was sent: it returned HTTP 422 'Failed to deserialize' with ACAO: *, and the preflight is open, so a static site can POST signed actions directly with no backend. The 'auth' is not an API key: each request carries an EIP-712 signature from an EVM key (see the feasibility entry)."
+   },
+   {
+    "need": "Feasibility summary: what trading Hyperliquid perps needs from a browser wallet (EVM signing)",
+    "endpoint": "Signing flow: wallet eth_signTypedData_v4 for user-signed actions, plus a local agent key for L1 actions, both POSTed to /exchange",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "see /exchange entry",
+    "sample_fields": "approveAgent action: {type:\"approveAgent\", hyperliquidChain:\"Mainnet\", signatureChainId:\"0xa4b1\", agentAddress, agentName, nonce}. Order action: {type:\"order\", orders:[{a:assetIndex, b:isBuy, p:\"px\", s:\"sz\", r:reduceOnly, t:{limit:{tif:\"Gtc\"|\"Ioc\"|\"Alo\"}}}], grouping:\"na\", builder?:{b:addr, f:tenthsOfBp}}",
+    "notes": "FEASIBLE from a static site with no backend, but it needs an EVM wallet. Not done here: no signing or trading was tested; the steps below come from Hyperliquid's documented protocol. (1) Wallet: the user needs an EVM wallet (MetaMask, Rabby, or Phantom's EVM account) and EVM-only libraries (viem/ethers). A Solana-only wallet cannot trade or even be looked up. (2) Funding: USDC on Arbitrum is sent to the Hyperliquid bridge (0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7, 5 USDC minimum, about 1 min to credit). That is a wallet transaction the site can prompt for. Withdrawals use the user-signed withdraw3 action with a ~$1 fee. SOL can also come in through the Hyperunit bridge, but it lands as a spot asset, not perp USDC margin. (3) Signing: user actions (approveAgent, approveBuilderFee, usdSend, withdraw3, usdClassTransfer) are EIP-712 typed data with domain 'HyperliquidSignTransaction' and chainId 42161, so normal wallet popups work. Trading actions (order, cancel, modify, updateLeverage) use a 'phantom agent' signature: the action is msgpack-encoded with nonce and vault, keccak-hashed, then signed under domain 'Exchange' with chainId 1337. Wallets like MetaMask refuse that chainId mismatch. The standard pattern, which Hyperliquid's own UI and Axiom-style terminals use, is: the user signs approveAgent ONCE with their wallet, the site generates an agent private key in the browser (kept in localStorage or IndexedDB), and that key signs every order with no popups. That gives one-click trading. Agent keys can trade but cannot withdraw. (4) Revenue: builder codes let the site add a fee (field f, in tenths of a basis point, max 0.1% on perps) after the user signs approveBuilderFee once. (5) Libraries: @nktkas/hyperliquid (TypeScript, runs in the browser, includes signing helpers) or a hand-rolled version with @msgpack/msgpack plus viem, loadable from cdn.jsdelivr.net/npm. Order details: prices must respect 5 significant figures and the asset's szDecimals; asset index = position in the meta.universe array; market orders are IOC limit orders at a slippage-adjusted price. (6) Risks: storing agent keys in the browser has security implications, and Hyperliquid's terms restrict US and some other jurisdictions (the API does not block by IP, but the operator carries the compliance risk). Overall: read-only perps data (screener, charts, book, positions by address) is fully usable today with no keys. Trading is technically possible client-side but adds an EVM wallet requirement alongside the Solana pump.fun flow."
+   }
+  ]
+ },
+ {
+  "results": [
+   {
+    "need": "Bulk USD prices for many Solana mints (primary)",
+    "endpoint": "GET https://lite-api.jup.ag/price/v3?ids={mint1,mint2,...}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No rate-limit headers returned. Jupiter's docs put the free lite tier at about 60 req/min. The response keeps only the first 50 ids: with 51 or 100 sent it returned exactly ids 0-49 and dropped the rest with no error. Batch in chunks of 50.",
+    "sample_fields": "Object keyed by mint: $[mint].usdPrice (number), $[mint].priceChange24h (percent), $[mint].liquidity (USD), $[mint].decimals, $[mint].blockId, $[mint].createdAt, $[mint].launchpad (e.g. \"pump.fun\"). Example: SOL usdPrice 119.62; 8oEz...pump usdPrice 0.00000299, launchpad pump.fun, liquidity 436.",
+    "notes": "HTTP 200. The server copies the request origin into Access-Control-Allow-Origin (https://example.com) with Vary: Origin and allow-credentials true. OPTIONS preflight returns 204 with the same headers. Mints with no price, such as the wallet's other token HCESMKvzY7D1XbsyNJz1Gvmahot4gQuG3aLQno68pump and the System Program id, are left out of the response without an error. The migrated pump.fun mint is priced from its PumpSwap pool ($0.000002992, same as Dexscreener). The legacy /price/v2 now returns 404 'Route not found'. https://api.jup.ag/price/v3 also returned 200 with CORS and no key in this test, but lite-api is the documented keyless host."
+   },
+   {
+    "need": "Bulk prices plus market data (mcap, volume, liquidity, logo, socials) for many mints",
+    "endpoint": "GET https://api.dexscreener.com/tokens/v1/solana/{mint1,mint2,...}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No rate-limit headers. Dexscreener documents 300 req/min for this endpoint. Response cache is max-age=30. Only the first 30 addresses are used: with 31 sent it returned 30 pairs and dropped address 31 with no error. Batch in chunks of 30.",
+    "sample_fields": "Array of pairs: [i].baseToken.address/.symbol/.name, [i].quoteToken.address, [i].priceUsd (string), [i].priceNative, [i].priceChange.{m5,h1,h6,h24}, [i].volume.{m5,h1,h6,h24}, [i].txns.h24.{buys,sells}, [i].liquidity.usd, [i].marketCap, [i].fdv, [i].pairAddress, [i].dexId, [i].pairCreatedAt, [i].info.imageUrl, [i].info.websites[], [i].info.socials[]. Example: HATCH (8oEz...pump) on pumpswap pair GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT, priceUsd 0.000002992, marketCap 2884, liquidity.usd 2944.",
+    "notes": "HTTP 200 with Access-Control-Allow-Origin: *. OPTIONS preflight returns 204 with ACAO *. In these tests it returned one pair per mint (the main pool). Still, group the results by baseToken.address and keep the pair with the most liquidity, because a mint can also show up as the quoteToken. An unknown mint returns []. Related endpoints, all ACAO * with 200: /token-pairs/v1/solana/{mint} returns every pool for one mint (here pumpswap at $0.00000299 plus the old pumpfun bonding-curve pair at $0.000049). /latest/dex/pairs/solana/{pairAddress} returns the GuwoKC pool, wrapped as {pairs:[...]}. This is the best source for Axiom-style token rows: mcap, volume, txns, age, logo."
+   },
+   {
+    "need": "USD prices for major coins by CoinGecko id (SOL, BTC, ETH, JUP, BONK)",
+    "endpoint": "GET https://api.coingecko.com/api/v3/simple/price?ids=solana,bitcoin,...&vs_currencies=usd&include_24hr_change=true&include_market_cap=true",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No key. The public keyless limit is low and changes; CoinGecko states roughly 5-30 calls/min per IP. Cache is max-age=30 / s-maxage=60. Several ids per call work.",
+    "sample_fields": "$.solana.usd, $.solana.usd_24h_change, $.solana.usd_market_cap (same keys under each id). Example: solana usd 119.63, bitcoin usd 84788.",
+    "notes": "HTTP 200 with ACAO *. Takes CoinGecko ids, not Solana mints, so it only fits the SOL ticker and majors. It is not usable for pump.fun tokens."
+   },
+   {
+    "need": "USD price by Solana mint via CoinGecko",
+    "endpoint": "GET https://api.coingecko.com/api/v3/simple/token_price/solana?contract_addresses={mint}&vs_currencies=usd",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Keyless calls accept only 1 contract address. Sending 2 returned HTTP 400, error_code 10012, \"exceeds the allowed limit of 1 contract address\".",
+    "sample_fields": "$[mint].usd. SOL mint returned {\"So111...112\":{\"usd\":119.56}}.",
+    "notes": "ACAO * is present, including on the 400. Bulk requests fail without a key, and the pump.fun mint returned {}, so it does not cover new tokens. Not usable for many tokens at once."
+   },
+   {
+    "need": "Bulk prices by mint via GeckoTerminal (CoinGecko on-chain)",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/{mint1,mint2,...}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Very tight. After 2 calls every later call (including after a 25s wait) returned HTTP 429 with retry-after: 0. Those 429 responses have NO Access-Control-Allow-Origin header, so a browser reports a CORS error instead of a 429. GeckoTerminal documents 30/min and up to 30 addresses per call.",
+    "sample_fields": "$.data[i].attributes.address, .price_usd (string), plus fdv_usd, market_cap_usd, volume_usd, total_reserve_in_usd.",
+    "notes": "The first call returned 200 with ACAO *. The pump.fun mint came back at $0.0000488, the old bonding-curve price, while Jupiter and Dexscreener both show about $0.00000299 after the PumpSwap migration, so the data looked out of date. Fallback only. Also tried /simple/networks/solana/token_price/{mints}: it returned 429 every time, with no CORS header, so it could not be checked."
+   },
+   {
+    "need": "Bulk prices by mint via Raydium (extra fallback)",
+    "endpoint": "GET https://api-v3.raydium.io/mint/price?mints={mint1,mint2,...}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Not tested and not documented. No rate-limit headers.",
+    "sample_fields": "$.data[mint] = USD price as a string, or null. SOL \"119.54\"; 8oEz...pump null.",
+    "notes": "HTTP 200 with ACAO *. Only covers mints that have Raydium pools: PumpSwap and pump.fun tokens come back null. Useful only as a fallback for majors."
+   }
+  ]
+ },
+ {
+  "results": [
+   {
+    "need": "Token search by name/ticker/mint (primary: Solana-only, token-level results)",
+    "endpoint": "GET https://lite-api.jup.ag/tokens/v2/search?query={name|ticker|mint[,mint2,...]}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No rate-limit headers returned. A burst of 25 back-to-back requests all came back 200. Responses carry cache-control max-age=10.",
+    "sample_fields": "Response is a top-level array with at most 20 items. Each item has [i].id (mint), [i].name, [i].symbol, [i].icon, [i].decimals, [i].usdPrice, [i].mcap, [i].fdv, [i].liquidity, [i].holderCount, [i].circSupply, [i].totalSupply, [i].tokenProgram, [i].dev, [i].launchpad ('pump.fun'), [i].graduatedPool and [i].graduatedAt (present only once migrated), [i].firstPool.{id,createdAt}, [i].createdAt, [i].isVerified, [i].tags[] (e.g. 'verified','strict','token-2022','unknown'), [i].organicScore, [i].organicScoreLabel, [i].audit.{mintAuthorityDisabled,freezeAuthorityDisabled,topHoldersPercentage,devBalancePercentage,devMints}. Stats blocks are [i].stats5m / stats1h / stats6h / stats24h, each with {priceChange,holderChange,liquidityChange,volumeChange,buyVolume,sellVolume,buyOrganicVolume,sellOrganicVolume,numBuys,numSells,numTraders,numOrganicBuyers,numNetBuyers}. stats5m and stats1h can be missing on brand-new tokens.",
+    "notes": "Echoes the request Origin in Access-Control-Allow-Origin (got https://example.com), and the OPTIONS preflight returns 204 with CORS headers. Searching the mint 8oEzj8zg9bnXfcCEwqfstwJe8AoEtJdWZaCDww6Dpump returned exactly 1 result: Hatch/HATCH, launchpad pump.fun, graduatedPool GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT, graduatedAt 2026-10-03T13:56:17Z, mcap about $2.88k, holderCount 163. Searching the ticker 'HATCH' returned 20 Solana tokens, mostly pump.fun, in Jupiter's own relevance ranking. 'sol' returns SOL (So111...112) first, then JupSOL, JitoSOL and others. 'bonk' returns the verified BONK first. A comma-separated list of mints works as a batch lookup ('mintA,So111...112' returned HATCH and SOL). Results are Solana-only and one row per token, which makes this the best fit for an Axiom-style search box."
+   },
+   {
+    "need": "Token search by name/ticker/mint (pair-level: dex, pool, txns, socials)",
+    "endpoint": "GET https://api.dexscreener.com/latest/dex/search?q={name|ticker|mint|pair}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No rate-limit headers returned. A burst of 25 requests all came back 200. Dexscreener's docs give 300 req/min for this endpoint. Responses carry cache-control public, max-age=60.",
+    "sample_fields": "Response is {schemaVersion, pairs[]} with at most 30 pairs. Each pair has pairs[i].chainId, pairs[i].dexId ('pumpswap','pumpfun','raydium','orca','meteoradbc'...), pairs[i].url, pairs[i].pairAddress, pairs[i].labels[], pairs[i].baseToken.{address,name,symbol}, pairs[i].quoteToken.{address,name,symbol}, pairs[i].priceNative, pairs[i].priceUsd, pairs[i].txns.{m5,h1,h6,h24}.{buys,sells}, pairs[i].volume.{m5,h1,h6,h24}, pairs[i].priceChange.{m5,h1,h6,h24}, pairs[i].liquidity.{usd,base,quote} (missing on pumpfun bonding-curve pairs), pairs[i].fdv, pairs[i].marketCap, pairs[i].pairCreatedAt (ms), pairs[i].info.imageUrl, pairs[i].info.header, pairs[i].info.websites[].{url,label} and pairs[i].info.socials[].{url,type}.",
+    "notes": "Access-Control-Allow-Origin is '*', and the OPTIONS preflight returns 204. Results span many chains: a 'pepe' search came back 17 solana, 6 robinhood, 4 base and others, so the client has to filter on chainId==='solana'. Searching the mint 8oEz...pump returned 2 pairs: pumpswap GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT (mcap 2884, liquidity.usd 2944.94) and the old pumpfun bonding-curve pair 5cLJ4smw... (no liquidity field), so one token can appear as several rows and needs deduping by baseToken.address. Searching the ticker 'HATCH' returned 30 pairs, Solana pumpfun/pumpswap mixed with base and arc. Pair syntax like 'SOL/USDC' works but returns noisy junk tokens. Best used to add pair, dex, txns and socials to Jupiter results."
+   },
+   {
+    "need": "Token lookup by mint (pairs for a known mint, after search)",
+    "endpoint": "GET https://api.dexscreener.com/tokens/v1/solana/{mint[,mint...]}  and  GET https://api.dexscreener.com/token-pairs/v1/solana/{mint}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No headers returned. Dexscreener's docs give 300 req/min.",
+    "sample_fields": "Response is a top-level array of pair objects with the same shape as search pairs[]: [i].dexId, [i].pairAddress, [i].baseToken, [i].quoteToken, [i].priceUsd, [i].marketCap, [i].liquidity.usd, [i].txns, [i].volume, [i].priceChange, [i].info.imageUrl and [i].info.socials.",
+    "notes": "Access-Control-Allow-Origin is '*'. Both endpoints returned the pumpswap pool GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT for the HATCH mint. They are Solana-scoped, so no chain filtering is needed. tokens/v1 accepts comma-separated mints. This is not a free-text search, but it is useful once a mint is chosen."
+   },
+   {
+    "need": "Token search (Jupiter main gateway, keyless)",
+    "endpoint": "GET https://api.jup.ag/tokens/v2/search?query=bonk",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Very low without a key: x-ratelimit-remaining started at 4\u20135 and went to 0, then the 6th rapid request got HTTP 429. Headers x-ratelimit-remaining, x-ratelimit-current and x-ratelimit-reset are exposed to browsers via access-control-expose-headers.",
+    "sample_fields": "Same shape as lite-api: an array of {id,name,symbol,icon,usdPrice,mcap,liquidity,holderCount,stats*...}.",
+    "notes": "Works without a key and echoes the Origin in Access-Control-Allow-Origin, but the keyless quota is only about 5 requests per window, which is unusable for search-as-you-type. Use lite-api.jup.ag instead. Keep this only as a fallback if lite-api is ever retired, since Jupiter has signalled that lite-api will be deprecated in favour of keyed api.jup.ag."
+   },
+   {
+    "need": "Token/pool search (GeckoTerminal alternative)",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/search/pools?query={q}&network=solana",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Strict. The first call returned 200, and the next 2 calls a few seconds apart both returned 429 'You've exceeded the Rate Limit' with retry-after: 0. The public limit is about 30/min per IP, and it appeared to be already used up from this IP.",
+    "sample_fields": "JSON:API format: data[i].id ('solana_<pool>'), data[i].attributes.{base_token_price_usd, quote_token_price_usd, base_token_price_native_currency, ...}, data[i].relationships.{base_token,quote_token,dex}. With &include=base_token you also get included[].attributes.image_url.",
+    "notes": "The 200 response had Access-Control-Allow-Origin '*'. The 429 responses had no CORS header, so a browser would show them as CORS failures. It does support network=solana filtering, but the rate limit is too tight to use as a primary search. Marked works=false because 2 of 3 calls failed."
+   },
+   {
+    "need": "Token search (pump.fun native)",
+    "endpoint": "GET https://frontend-api-v3.pump.fun/coins/search?searchTerm=HATCH&limit=5&offset=0&sort=market_cap&order=DESC&includeNsfw=false  and  GET https://frontend-api-v3.pump.fun/coins/{mint}",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "n/a. The body was {statusCode:403, message:'Not allowed by CORS', error:'Forbidden'}.",
+    "notes": "With Origin https://example.com both endpoints returned HTTP 403 'Not allowed by CORS'. The server enforces an origin allowlist, so a static site cannot use it. Jupiter's launchpad, graduatedPool and graduatedAt fields plus Dexscreener's pumpfun/pumpswap dexId cover the same pump.fun information."
+   }
+  ]
+ },
+ {
+  "results": [
+   {
+    "need": "Top holders list (largest token accounts) for a mint",
+    "endpoint": "POST https://api.mainnet-beta.solana.com getTokenLargestAccounts",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "Method is disabled: always HTTP 429 'Too many requests for a specific RPC call' with x-ratelimit-method-limit: 0, from any Origin (or none). Also fails for the SOL mint.",
+    "notes": "Do not use it. The public RPC (operated by Triton One) also allowlists Origins. Only https://solana.com, https://www.solana.com, https://explorer.solana.com and https://faucet.solana.com get a matching ACAO. Every other Origin tested (example.com, *.netlify.app, localhost, 127.0.0.1, claude.ai, *.claudeusercontent.com, github.io, pump.fun, jup.ag, solscan.io, file://) gets HTTP 403 'Access forbidden' on every method, even getSlot. That 403 carries ACAO '*', so a browser can read the error. The OPTIONS preflight from example.com passes, but the POST itself is 403. With Origin 'null' or no Origin the call gets through, but ACAO comes back as the literal 'backend_traffic', which a browser rejects."
+   },
+   {
+    "need": "Top holders list with owners resolved (replacement for getTokenLargestAccounts + getMultipleAccounts)",
+    "endpoint": "GET https://datapi.jup.ag/v1/holders/<mint>",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No ratelimit headers. A 40-request burst returned all 200. cache-control: public, max-age=3.",
+    "sample_fields": "$.count (total holder count, 163 here); $.holders[] (always the top 100; limit, offset, page and cursor params are ignored); $.holders[].address (OWNER wallet, already resolved, not the token account); $.holders[].amount (UI amount, number); $.holders[].solBalance (lamports string); $.holders[].solBalanceDisplay; $.holders[].tags[] {id:'Pool', name:'Pumpfun AMM Liquidity Pool'} (marks the pumpswap pool GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT); $.holders[].holderTags[]; $.holders[].addressInfo {fundingAddress, fundingAmount, fundingTx, fundingBlockTime, fundingSlot} (where each wallet was funded from, useful for spotting bundles)",
+    "notes": "Echoes the request Origin in ACAO, with access-control-allow-credentials: true. This is the frontend data API behind jup.ag and is undocumented. Percent held = amount / circSupply (circSupply comes from tokens/v2/search). Also works for the SOL mint."
+   },
+   {
+    "need": "Token supply",
+    "endpoint": "POST https://api.mainnet-beta.solana.com getTokenSupply",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "x-ratelimit-method-limit: 150, x-ratelimit-rps-limit: 250 (headers seen when called without an Origin)",
+    "sample_fields": "$.result.value.amount, .decimals (6), .uiAmount (963884922.835405), .uiAmountString",
+    "notes": "Works from curl with no Origin. From a browser on any non-solana.com Origin it returns 403 'Access forbidden', so a static site cannot use it."
+   },
+   {
+    "need": "Token supply (CORS-open RPC alternative)",
+    "endpoint": "POST https://rpc.solanatracker.io/public getTokenSupply",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No ratelimit headers. A 30-request burst returned all 200.",
+    "sample_fields": "$.result.value.amount, $.result.value.decimals, $.result.value.uiAmount, $.result.context.slot",
+    "notes": "Returns ACAO '*'. On this same endpoint getTokenLargestAccounts gives error -32603 'No response', and getTokenAccountsByOwner and getProgramAccounts give -32601 'Method ... is not allowed'. Jupiter tokens/v2/search circSupply/totalSupply is an easier source for supply."
+   },
+   {
+    "need": "Resolve token-account owners / read mint + pool accounts (jsonParsed)",
+    "endpoint": "POST https://api.mainnet-beta.solana.com getMultipleAccounts {encoding:jsonParsed}",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "x-ratelimit-method-limit: 50 (seen when called with Origin null)",
+    "sample_fields": "$.result.value[i].data.parsed.info.owner / .mint / .tokenAmount; for the mint: .mintAuthority (null), .freezeAuthority (null), .supply, .extensions[] (metadataPointer, tokenMetadata {name:'Hatch', symbol:'HATCH', uri})",
+    "notes": "Returns data but cannot be used from a browser. Real Origins get 403. Origin null passes but gets ACAO 'backend_traffic'."
+   },
+   {
+    "need": "Resolve owners / read mint + pool accounts (CORS-open RPC alternative)",
+    "endpoint": "POST https://rpc.solanatracker.io/public getMultipleAccounts {encoding:jsonParsed}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "None observed",
+    "sample_fields": "$.result.value[i].data.parsed.info (mintAuthority, freezeAuthority, supply, extensions[].tokenMetadata name/symbol/uri)",
+    "notes": "Returns ACAO '*'. Works on the Token-2022 pump mint, which carries name, symbol and uri in its extensions. Mostly not needed: datapi holders already gives owner wallets."
+   },
+   {
+    "need": "Wallet token holdings (getTokenAccountsByOwner, legacy Token program)",
+    "endpoint": "POST https://api.mainnet-beta.solana.com getTokenAccountsByOwner programId TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "x-ratelimit-method-limit: 10",
+    "sample_fields": "$.result.value[] (empty for this wallet)",
+    "notes": "Works with Origin null or no Origin, but browsers on a real Origin get 403."
+   },
+   {
+    "need": "Wallet token holdings (getTokenAccountsByOwner, Token-2022)",
+    "endpoint": "POST https://api.mainnet-beta.solana.com getTokenAccountsByOwner programId TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "x-ratelimit-method-limit: 10",
+    "sample_fields": "$.result.value[].pubkey; .account.data.parsed.info.mint/.owner/.tokenAmount.uiAmount; .extensions [immutableOwner]",
+    "notes": "Data is correct (wallet 9akU... holds 0 HATCH in ATA 2soGJSSuXSqKdPZ5w67iMG3rUeGKt8gHX9kTyPe6XEAd), but browsers on a real Origin get 403. pump.fun mints ending in 'pump' are now Token-2022, so both programs must be queried."
+   },
+   {
+    "need": "Wallet token holdings, both programs at once (CORS-open replacement)",
+    "endpoint": "GET https://lite-api.jup.ag/ultra/v1/holdings/<wallet>",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No ratelimit headers",
+    "sample_fields": "$.amount / $.uiAmount (SOL lamports / SOL); $.tokens[<mint>][] {account, amount, uiAmount, decimals, programId, isFrozen, isAssociatedTokenAccount, lamports}",
+    "notes": "Echoes Origin in ACAO. Covers both Tokenkeg and Token-2022 and includes zero-balance accounts. A lighter variant, GET https://lite-api.jup.ag/ultra/v1/balances/<wallet>, returns {SOL:{amount,uiAmount}, <mint>:{amount,uiAmount,isFrozen}} with non-zero balances only; it is also CORS-open."
+   },
+   {
+    "need": "Holder count, organic score, audit (mint/freeze authority, top holders %, dev balance %), plus price, mcap, liquidity and stats",
+    "endpoint": "GET https://lite-api.jup.ag/tokens/v2/search?query=<mint>",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No ratelimit headers. A 40-request burst returned all 200. cache-control: public, max-age=10.",
+    "sample_fields": "$[0].holderCount (164); $[0].organicScore (46.0); $[0].organicScoreLabel ('medium'); $[0].audit.mintAuthorityDisabled (true); $[0].audit.freezeAuthorityDisabled (true); $[0].audit.topHoldersPercentage (10.09); $[0].audit.devBalancePercentage (OMITTED when the dev holds 0, as here; present on 17 of 50 trending tokens); $[0].audit.devMigrations; $[0].audit.devMints; $[0].dev (creator wallet 9akU...); $[0].launchpad ('pump.fun'); $[0].graduatedPool (GuwoKCn...); $[0].graduatedAt; $[0].tokenProgram; $[0].circSupply / totalSupply; $[0].usdPrice / mcap / fdv / liquidity; $[0].stats5m|1h|6h|24h {priceChange, holderChange, buyVolume, sellVolume, buyOrganicVolume, numBuys, numSells, numTraders, numOrganicBuyers, numNetBuyers}; $[0].tags; $[0].isVerified; $[0].icon/name/symbol",
+    "notes": "Echoes Origin in ACAO, with credentials true. Takes comma-separated mints in query (mint + SOL returned 2 results). SOL returns holderCount 3820662, organicScore 99.3, topHoldersPercentage 0.58. https://datapi.jup.ag/v1/assets/search?query=<mint> returns the same shape and is also CORS-open. GET lite-api.jup.ag/tokens/v2/toptrending/1h?limit=50 also works."
+   },
+   {
+    "need": "Risk warnings for a mint",
+    "endpoint": "GET https://lite-api.jup.ag/ultra/v1/shield?mints=<mint>",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No ratelimit headers",
+    "sample_fields": "$.warnings[<mint>][] {type: 'NOT_VERIFIED'|'LOW_LIQUIDITY'|'NEW_LISTING', message, severity: 'info'}",
+    "notes": "Echoes Origin in ACAO. Good for an Axiom-style warnings badge."
+   },
+   {
+    "need": "Holder list via getProgramAccounts memcmp on mint (fallback)",
+    "endpoint": "POST https://api.mainnet-beta.solana.com getProgramAccounts (Token-2022, memcmp offset 0 = mint)",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "x-ratelimit-method-limit: 10",
+    "notes": "Works from curl with Origin null (returned token accounts), but is blocked by the Origin allowlist in browsers. rpc.solanatracker.io/public returns 'Method getProgramAccounts is not allowed'."
+   },
+   {
+    "need": "Alternative keyless public RPCs (getTokenLargestAccounts / getTokenSupply)",
+    "endpoint": "solana-rpc.publicnode.com, solana.drpc.org, rpc.ankr.com/solana, api.mainnet.solana.com, solana.api.onfinality.io/public, solana.blockpi.network/v1/rpc/public, mainnet.helius-rpc.com, api.blockeden.xyz/solana/public, endpoints.omniatech.io/v1/sol/mainnet/public, solana.public-rpc.com, solana-mainnet.rpc.extrnode.com",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": true,
+    "rate_limit": "onfinality: 1 rps / 1000 per day, returned 429 at once",
+    "notes": "All fail without a key. publicnode: 403 'Indexed requests require a personal token' (even getTokenSupply). drpc: 'chain is not available on free plan'. ankr: 'API key is not allowed'. api.mainnet.solana.com: 403. onfinality: 429. blockpi: 'Apikey not found'. helius and blockeden: 401. omniatech: 521. public-rpc.com and extrnode: no response. Most send ACAO '*' on the error, but none return usable data."
+   }
+  ]
+ },
+ {
+  "results": [
+   {
+    "need": "List a wallet's limit orders (Trigger V1, active + history), keyless legacy host",
+    "endpoint": "GET https://lite-api.jup.ag/trigger/v1/getTriggerOrders?user=9akUAsfojYqigRJSyxGJbvjjbnSBwEusr8Hroh3qZp7t&orderStatus=active (also &orderStatus=history)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No x-ratelimit headers returned. Docs (portal/migration) say lite-api.jup.ag 'will be phased out' and its rate limit 'reduced progressively until it is fully retired'.",
+    "sample_fields": "$.orders[] (empty for this wallet), $.totalPages, $.page, $.totalItems, $.user, $.orderStatus. Per the OpenAPI spec each order has: userPubkey, orderKey, inputMint, outputMint, makingAmount, takingAmount, remainingMakingAmount, remainingTakingAmount, rawMakingAmount, rawTakingAmount, slippageBps, expiredAt, createdAt, updatedAt, status, openTx, closeTx, trades[] (keeper, inputAmount, outputAmount, feeMint, feeAmount, txId, confirmedAt, action)",
+    "notes": "HTTP 200 with access-control-allow-origin: *. Optional query params: page (10 orders per page), includeFailedTx, inputMint, outputMint. This wallet has 0 orders, so the order item shape comes from the docs and was not seen live."
+   },
+   {
+    "need": "Create a limit order (Trigger V1): returns an unsigned tx the user signs in their wallet",
+    "endpoint": "POST https://lite-api.jup.ag/trigger/v1/createOrder",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Same as lite-api above. It is being phased out, so move to api.jup.ag.",
+    "sample_fields": "Request: {inputMint, outputMint, maker, payer, params:{makingAmount (string, raw), takingAmount (string, raw), slippageBps? (default 0 = exact), expiredAt? (unix seconds), feeBps? (needs a referral feeAccount)}, computeUnitPrice:'auto', feeAccount?, wrapAndUnwrapSol? (default true)}. Response: $.order (order account pubkey), $.transaction (base64 unsigned tx), $.requestId (pass to /execute). Error: {error, cause:'input mint making amount must be at least 5 USD...', code:400}",
+    "notes": "I did NOT call this POST, so the 'works' value is unverified. The session's permission classifier blocked the live createOrder call as a real-world transaction, and I did not retry it. Only the CORS preflight was tested: OPTIONS returned 204 with ACAO *, allow-methods GET,POST,OPTIONS and allow-headers content-type. Fees per the docs: Jupiter takes 0.03% on stable pairs and 0.1% on all other pairs. Integrators can add feeBps through the referral program, paid on fill. Minimum is 5 USD, which the API error text enforces. V1 triggers on the pool rate (takingAmount/makingAmount), not a USD price. It supports buy below and sell above only, with no TP/SL, and pending orders are visible on-chain in PDAs. Docs banner: 'Trigger V1 is no longer actively maintained' (critical fixes only, no deprecation date). Token-2022: only mints with the transfer-tax extension are disabled. The test mint 8oEz...pump is Token-2022 with only metadataPointer + tokenMetadata extensions (checked over RPC), so it should be eligible, but a live order was not confirmed. The test wallet holds only 0.0306 SOL (about $3.66), which is below the $5 minimum anyway. For a static site, the user's wallet signs the tx and the page then POSTs to /trigger/v1/execute."
+   },
+   {
+    "need": "Submit a signed trigger tx (no RPC needed), plus cancel one or many orders",
+    "endpoint": "POST https://lite-api.jup.ag/trigger/v1/execute ; POST /trigger/v1/cancelOrder ; POST /trigger/v1/cancelOrders",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "lite-api (being retired)",
+    "sample_fields": "execute request: {signedTransaction (base64), requestId}. cancelOrder request: {maker, order (orderKey), computeUnitPrice:'auto'} -> {transaction, requestId}. cancelOrders request: {maker, orders?:[...]} -> {transactions[], requestId}. Omitting orders cancels ALL open orders, in batches of 5 per tx.",
+    "notes": "Only the CORS preflight was tested: OPTIONS returned 204 with ACAO * on all three. The POSTs were not sent because there was no order to act on and the order-creation category was blocked. Use /execute: the public RPC https://api.mainnet-beta.solana.com returned HTTP 403 'Access forbidden' whenever an Origin header was present, so a static site cannot send transactions through the public RPC."
+   },
+   {
+    "need": "List a wallet's DCA orders (Recurring V1)",
+    "endpoint": "GET https://lite-api.jup.ag/recurring/v1/getRecurringOrders?user=9akUAsfojYqigRJSyxGJbvjjbnSBwEusr8Hroh3qZp7t&orderStatus=active&recurringType=time&includeFailedTx=false",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No rate-limit headers (lite-api, being retired)",
+    "sample_fields": "$.user, $.orderStatus, $.time[] (orders; empty here), $.totalPages, $.totalItems, $.page",
+    "notes": "Without includeFailedTx it returns HTTP 400 text/plain: 'Failed to deserialize query string: missing field `includeFailedTx`'. With it you get 200 and ACAO *. The spec marks recurringType (time|price), orderStatus (active|history), user and includeFailedTx as required. page and mint are also listed."
+   },
+   {
+    "need": "Create a DCA order (Recurring V1)",
+    "endpoint": "POST https://lite-api.jup.ag/recurring/v1/createOrder (plus /recurring/v1/execute, /recurring/v1/cancelOrder)",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "lite-api (being retired)",
+    "sample_fields": "Request: {user, inputMint, outputMint, params:{time:{inAmount (number, raw), numberOfOrders, interval (seconds), minPrice|null, maxPrice|null, startAt|null}}}. The params.price variant is deprecated. Response: $.requestId, $.transaction (base64). Error: {code:400, error:'Order is valued at 2.99 USDC, minimum is 100.00 USDC', status}",
+    "notes": "Not called live (same permission block as order creation). CORS preflight on createOrder, execute and cancelOrder returned 200 with ACAO * and allow-headers *. UNSUITABLE for pump.fun coins. The docs say 'The Recurring API does not currently support Token-2022 mints', and new pump.fun mints like 8oEz...pump are Token-2022 (tags: token-2022). Other limits: minimum 100 USD total, at least 2 orders, and 50 USD per order. Fee is 0.1%, with no integrator fees. Docs status: 'no longer actively maintained and has been superseded by DCA' (Trigger V2)."
+   },
+   {
+    "need": "Same Trigger V1 / Recurring V1 reads on the new keyless gateway (the lite-api replacement)",
+    "endpoint": "GET https://api.jup.ag/trigger/v1/getTriggerOrders?user=...&orderStatus=active ; GET https://api.jup.ag/recurring/v1/getRecurringOrders?user=...&orderStatus=active&recurringType=time&includeFailedTx=false",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Keyless with no x-api-key. Documented at 0.5 RPS on a 60 s sliding window, applied per organisation (for keyless clients that likely means per IP). Observed headers: x-ratelimit-remaining 4 after the first call, plus x-ratelimit-current and x-ratelimit-reset (unix seconds). These headers are exposed to browsers through access-control-expose-headers. The limit is returned as HTTP 429.",
+    "sample_fields": "Same bodies as the lite-api versions: $.orders[], $.totalItems / $.time[], $.totalItems",
+    "notes": "200 responses, with access-control-allow-origin echoing the Origin (https://example.com). Docs: 'Keyless access ... Replaces lite-api.jup.ag with keyless requests on api.jup.ag at 0.5 RPS'. Migration means changing only the base URL, since all paths stay the same. Preflights for api.jup.ag /trigger/v1/createOrder, /trigger/v1/cancelOrder, /trigger/v1/execute and /recurring/v1/createOrder all returned 200 with ACAO echoed, allow-methods GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS, and max-age 86400. This is the recommended host for a static site. The low keyless rate limit means order lists should not be polled aggressively."
+   },
+   {
+    "need": "Trigger V2 wallet login (needed for V2 limit orders, TP/SL and DCA)",
+    "endpoint": "POST https://api.jup.ag/trigger/v2/auth/challenge  body {walletPubkey, type:'message'} ; then POST /trigger/v2/auth/verify",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Keyless 0.5 RPS (x-ratelimit-remaining 4 observed)",
+    "sample_fields": "$.type ('message'), $.challenge ('Sign this message to authenticate with Jupiter that you are the owner of <wallet>... expires at <ISO> with the nonce of <uuid>'). verify request per the docs: {walletPubkey, signature (bs58 of wallet.signMessage(challenge)), authMode:'access_refresh'} -> {accessToken (15 min), refreshToken, expiresAt}",
+    "notes": "Keyless worked even though the OpenAPI spec lists ApiKeyAuth. Returned 200 with ACAO echoed. Challenges expire after 5 minutes. A static site can do this with the wallet adapter's signMessage. The JWT goes in the Authorization: Bearer header, and preflight allows content-type,authorization. Omitting authMode falls back to access_only, which is deprecated (2026-07-21) and gives a 24h token. /auth/verify itself was not called because no wallet signature is available."
+   },
+   {
+    "need": "Trigger V2 order lists and vault (authenticated reads)",
+    "endpoint": "GET https://api.jup.ag/trigger/v2/orders/history?state=active ; GET /trigger/v2/orders/history/dca?state=active ; GET /trigger/v2/vault",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "Keyless 0.5 RPS",
+    "sample_fields": "Without a JWT: {error:'Unauthorized'} (401). Per the docs, history items carry id, orderState (pending/open/executing/filled/cancelled/expired/failed), rawState, triggerPriceUsd, trailingBps, highWatermark/lowWatermark, outputAmount, inputUsed, fillPercent, events[] (deposit/fill/withdrawal/cancelled/expired, each with txSignature, mint, amount), orderContext. DCA items carry inputAmountInitial, inputAmountRemaining, amountPerRound, numberOfRounds, roundsFilled, nextFillAt, state. vault returns {userPubkey, vaultPubkey, privyVaultId}.",
+    "notes": "All three returned 401 with ACAO echoed, so CORS is fine and they only need the JWT from auth/verify. They are marked works=false only because I could not obtain a JWT without a wallet signature. Query params: state (active|past), mint, limit 1-100, offset, sort, dir. On lite-api.jup.ag/trigger/v2 the same route also exists, but its 401 response had no ACAO header, so use api.jup.ag."
+   },
+   {
+    "need": "Trigger V2 create: limit, OCO TP/SL, OTOCO, trailing stop, and DCA (vault-based)",
+    "endpoint": "POST https://api.jup.ag/trigger/v2/deposit/craft -> POST /trigger/v2/orders/price or POST /trigger/v2/orders/dca (cancel: POST /orders/price/cancel/{id} + /orders/price/confirm-cancel/{id}; DCA: /orders/dca/cancel/{id} + /orders/dca/confirm-cancel/{id}; edit: PATCH /orders/price/{id})",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "Keyless 0.5 RPS",
+    "sample_fields": "deposit/craft request: {inputMint, outputMint, userAddress, amount, orderType:'price'|'dca', orderSubType:'single'|'oco'|'otoco'} -> {transaction, requestId, receiverAddress, ...}. orders/price request: {orderType, depositRequestId, depositSignedTx, userPubkey, inputMint, inputAmount, outputMint, triggerMint, expiresAt (ms, required), triggerCondition 'above'|'below', triggerPriceUsd | trailingBps (50-9000), slippageBps?, tpPriceUsd/slPriceUsd for oco/otoco} -> {id, txSignature, depositConfirmed}. orders/dca request: {depositRequestId, depositSignedTx, userPubkey, inputMint, outputMint, inputAmount, orderCount>=2, intervalSeconds 60..31536000, orderType 'time_based'|'price_conditional', minPriceUsd/maxPriceUsd/triggerMint, beginFillAt?}",
+    "notes": "Not called. These need a JWT, and the order-creation category was blocked. CORS preflights for deposit/craft, orders/price and orders/dca all returned 200 with ACAO echoed and authorization allowed. Limits: minimum 10 USD per price order, or per DCA round (so 20 USD for a 2-round DCA). Maximum of 10 active DCA orders. Price orders must have an expiry. Triggers use USD prices and allow buy above/below and sell above/below. Token-2022 is supported except for transfer-fee or transfer-hook mints, so the pump mint qualifies. Fees: the docs do not list a percentage ('swap fee is included in the output'). Integrator fees are not supported 'and there is no timeline'. CAVEATS: funds are deposited into a custodial Privy-managed vault (one per wallet), not an on-chain PDA, and the API is marked beta. Recurring V1 is unmaintained, which makes this the only maintained Jupiter DCA path."
+   },
+   {
+    "need": "Confirm Jupiter can route the pump.fun token (keepers fill through Jupiter routing)",
+    "endpoint": "GET https://lite-api.jup.ag/swap/v1/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=8oEzj8zg9bnXfcCEwqfstwJe8AoEtJdWZaCDww6Dpump&amount=50000000&slippageBps=100 ; GET https://lite-api.jup.ag/tokens/v2/search?query=8oEz...pump ; GET https://lite-api.jup.ag/price/v3?ids=...",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "lite-api (being retired). The same paths exist on api.jup.ag keyless.",
+    "sample_fields": "quote: $.outAmount='1945591335047' for 0.05 SOL, $.priceImpactPct\u22480.0267, $.routePlan[0].swapInfo.label='Pump.fun Amm', .ammKey='GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT'. tokens: tokenProgram='TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb', tags=['unknown','token-2022'], launchpad='pump.fun', graduatedPool=GuwoK..., liquidity\u2248436 USD. price/v3: $[mint].usdPrice\u22482.99e-6, decimals 6; SOL usdPrice\u2248119.62",
+    "notes": "ACAO * on all three. Jupiter routes the token through the PumpSwap pool given, so V1 and V2 trigger keepers can fill it. Liquidity is only about $436, so even a $6 order moves the price about 2.7%; expect partial or missed fills and warn users. The mint's Token-2022 extensions (from Solana RPC getAccountInfo) are only metadataPointer and tokenMetadata, with no transfer fee or hook."
+   },
+   {
+    "need": "Side finding: the public Solana RPC from a browser (for balances or sending signed txs)",
+    "endpoint": "POST https://api.mainnet-beta.solana.com (getBalance)",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "With Origin header: HTTP 403 {error:{code:403,message:'Access forbidden'}} even though ACAO is *. Without Origin: 200, result.value=30578123 lamports (0.0306 SOL for the test wallet)",
+    "notes": "The public mainnet RPC rejects browser-origin requests, so a static site should not rely on it. Use Jupiter's /execute endpoints to land Trigger V1 and Recurring txs, and pick another CORS-open RPC for reads."
+   }
+  ]
+ },
+ {
+  "results": [
+   {
+    "need": "Wallet activity: tx history list (getSignaturesForAddress)",
+    "endpoint": "POST https://solana-rpc.publicnode.com  {method:getSignaturesForAddress, params:[wallet,{limit:N}]}  (alias https://solana.publicnode.com behaves the same)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No rate-limit headers. 20 parallel requests all returned 200, and 15 sequential requests all returned 200.",
+    "sample_fields": "result[].signature, result[].blockTime (unix s), result[].slot, result[].err (null when ok), result[].confirmationStatus, result[].memo, result[].transactionIndex",
+    "notes": "Recommended primary RPC. Preflight (OPTIONS) returns 204 with ACAO *, allow-headers content-type. Wallet 9akU... returned 25 sigs spanning about 6 minutes (it is a busy pump.fun creator-fee recipient). Paginate with params[1].before = last signature."
+   },
+   {
+    "need": "Wallet activity: tx detail (getTransaction)",
+    "endpoint": "POST https://solana-rpc.publicnode.com  {method:getTransaction, params:[sig,{encoding:'jsonParsed', maxSupportedTransactionVersion:1}]}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Single calls are fine. A JSON-RPC BATCH with more than 1 getTransaction returns HTTP 400: Maximum number of 'getTransaction' calls in a batch request is 1.",
+    "sample_fields": "result.blockTime, result.version (0 or 1), result.meta.err, result.meta.fee, result.meta.preBalances[i]/postBalances[i] (lamports, i = index of wallet in accountKeys), result.meta.preTokenBalances[]/postTokenBalances[] {mint, owner, uiTokenAmount.uiAmountString}, result.meta.logMessages[] (e.g. 'Program log: Instruction: Buy|Sell|DistributeCreatorFees|CollectCoinCreatorFee'), result.meta.innerInstructions, result.transaction.message.accountKeys[] {pubkey, signer, writable, source}, result.transaction.message.instructions[] (parsed for system/spl), result.transaction.signatures[0]",
+    "notes": "CRITICAL: mainnet now carries version-1 transactions (seen on PumpSwap pool GuwoK... trades). maxSupportedTransactionVersion:0 makes them fail with error -32015 'Transaction version (1) is not supported... use maxSupportedTransactionVersion: 1'. Always pass 1. v1 messages have message.transactionConfig instead of addressTableLookups. To get a trade: compute the token delta from pre/postTokenBalances where owner==wallet and mint==token, and the SOL delta from pre/postBalances at the wallet's accountKeys index. Program ids in logs: pump 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P, PumpSwap pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA."
+   },
+   {
+    "need": "Wallet activity: history + detail (fallback RPC)",
+    "endpoint": "POST https://rpc.solanatracker.io/public  (getSignaturesForAddress, getTransaction)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Burst limit. After about 20 rapid requests it returned HTTP 429 {\"error\":\"Rate limit\"} with Retry-After: 10. 15 sequential requests were fine.",
+    "sample_fields": "Same JSON-RPC shapes as publicnode (result[].signature/blockTime/err; result.meta.*, result.transaction.message.accountKeys[])",
+    "notes": "Preflight 204 with ACAO *, allow-headers Content-Type, Authorization, Solana-Client. Accepts a JSON-RPC BATCH of multiple getTransaction calls (3 in one POST worked), which is useful for loading a page of wallet trades in one request. Still needs maxSupportedTransactionVersion:1. Use as a fallback and back off on 429."
+   },
+   {
+    "need": "Wallet activity: history + detail (fallback RPC)",
+    "endpoint": "POST https://public.rpc.solanavibestation.com  (getSignaturesForAddress, getTransaction)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Tight burst limit: 20 parallel requests gave 3x200 and 17x429. 15 sequential requests were all 200. Assume about 1 to a few req/s.",
+    "sample_fields": "Same JSON-RPC shapes as above",
+    "notes": "Preflight 204 with ACAO *. Batching multiple getTransaction calls works. Needs maxSupportedTransactionVersion:1. Use only as a secondary fallback because of the low burst tolerance."
+   },
+   {
+    "need": "Wallet activity via official public RPC",
+    "endpoint": "POST https://api.mainnet-beta.solana.com (also https://api.mainnet.solana.com, https://explorer-api.mainnet-beta.solana.com)",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "error.code 403, error.message 'Access forbidden'",
+    "notes": "Works from curl WITHOUT an Origin header (getSignaturesForAddress returned data). With ANY Origin header (https://example.com or http://localhost:3000) it returns HTTP 403 {\"error\":{\"code\":403,\"message\":\"Access forbidden\"}} even for getSlot, although the response carries ACAO *. So it is unusable from a browser-only site. Its websocket wss://api.mainnet-beta.solana.com also never opened (closed 1006)."
+   },
+   {
+    "need": "Wallet activity: other public RPCs tried",
+    "endpoint": "solana.drpc.org | rpc.ankr.com/solana | solana-mainnet.g.alchemy.com/v2/demo | solana.api.onfinality.io/public | endpoints.omniatech.io/v1/sol/mainnet/public | mainnet.helius-rpc.com | solana.blockpi.network/v1/rpc/public | solana-mainnet.core.chainstack.com | go.getblock.io/solana | 1rpc.io/sol | solana-mainnet.public.blastapi.io | solana.rpc.grove.city/v1/public | solana-mainnet.gateway.tatum.io | api.metaplex.solana.com | solana.lavenderfive.com | solana-mainnet.rpc.extrnode.com | rpc.1rpc.io/sol | mainnet.rpc.solana.com",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": true,
+    "rate_limit": "onfinality: x-ratelimit-limit-sec 1, returned 429 on the first try",
+    "sample_fields": "n/a",
+    "notes": "drpc: 400 'chain is not available on free plan'. ankr: 403 'API key is not allowed'. alchemy demo: 429, no ACAO. onfinality: 429 'apply an API key' (ACAO *). omniatech: 521. helius: 401. blockpi: 503 'Apikey not found'. chainstack: 401. getblock: 404. 1rpc.io/sol: 400 'unknown network'. blastapi, grove, tatum, metaplex, lavenderfive, extrnode, rpc.1rpc.io, mainnet.rpc.solana.com: no response or DNS failure. None of these is usable keyless."
+   },
+   {
+    "need": "Live wallet trades (PumpPortal subscribeAccountTrade)",
+    "endpoint": "wss://pumpportal.fun/api/data  send {\"method\":\"subscribeAccountTrade\",\"keys\":[\"9akUAsfojYqigRJSyxGJbvjjbnSBwEusr8Hroh3qZp7t\"]}",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "Ack (actually a refusal): {\"message\":\"'subscribeTokenTrade' and 'subscribeAccountTrade' methods are only available when connecting with an API key funded with at least 0.02 SOL.\"}",
+    "notes": "The socket opens fine and accepts Origin https://example.com: a raw curl upgrade returned 101 Switching Protocols, and the HTTP GET carries ACAO *. But subscribeAccountTrade is now key-gated, and no events arrived in 20s. Per the same server message, subscribeTokenTrade (per-mint live trades) is gated too. Not usable without a key. Use the RPC logsSubscribe entry below instead."
+   },
+   {
+    "need": "Live new token launches (PumpPortal subscribeNewToken) + pool field",
+    "endpoint": "wss://pumpportal.fun/api/data  send {\"method\":\"subscribeNewToken\"}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Unmetered. PumpPortal asks for ONE socket with many subscriptions; do not open a socket per subscription.",
+    "sample_fields": "Ack: {\"message\":\"Successfully subscribed to token creation events.\"}. pump event: signature, mint, traderPublicKey (creator), txType='create', initialBuy, solAmount, bondingCurveKey, vTokensInBondingCurve, vSolInBondingCurve, marketCapSol, name, symbol, uri (ipfs metadata json), is_mayhem_mode, pool='pump'. bonk event: signature, traderPublicKey, txType='create', mint, tokensInPool, initialBuy, solAmount, newTokenBalance, marketCapSol, pool='bonk' (NO name/symbol/uri/bondingCurveKey)",
+    "notes": "YES, events carry a 'pool' field. YES, letsbonk launches appear with pool:'bonk'. Over a 150s run: 75 creates (71 pool:'pump', 4 pool:'bonk'). A second 100s run: 51 pump, 0 bonk, so bonk launches are rare. The one bonk event inspected had no name/symbol/uri, so a bonk card needs metadata fetched another way (e.g. a Metaplex metadata account via RPC). Rate is about 0.5 pump launches/s. Socket messages without 'signature' are control/ack messages."
+   },
+   {
+    "need": "Live migrations / graduations (PumpPortal subscribeMigration)",
+    "endpoint": "wss://pumpportal.fun/api/data  send {\"method\":\"subscribeMigration\"}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Same socket as subscribeNewToken",
+    "sample_fields": "Ack: {\"message\":\"Subscribed to 'migration' events.\"}. Event: signature, mint, txType='migrate', pool ('pump-amm' for pump.fun -> PumpSwap, 'raydium-cpmm' for bonk -> Raydium CPMM)",
+    "notes": "2 migrations in 150s: one pump-amm (mint ...pump), one raydium-cpmm (mint ...bonk). Good for a 'Migrated' column like Axiom's Pulse."
+   },
+   {
+    "need": "Live wallet activity, keyless alternative (Solana RPC websocket)",
+    "endpoint": "wss://solana-rpc.publicnode.com | wss://rpc.solanatracker.io/public | wss://public.rpc.solanavibestation.com  send {jsonrpc:'2.0',id:1,method:'logsSubscribe',params:[{mentions:[wallet]},{commitment:'confirmed'}]}  (accountSubscribe [wallet,{encoding:'jsonParsed'}] also acked)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No limits observed. A 10s firehose test on the PumpSwap program delivered 5643 msgs on publicnode, 6135 on solanatracker and 1898 on vibestation.",
+    "sample_fields": "Ack: {\"jsonrpc\":\"2.0\",\"result\":<subId>,\"id\":1}. Notification: method='logsNotification', params.result.context.slot, params.result.value.signature, params.result.value.err, params.result.value.logs[]",
+    "notes": "WebSockets do not use CORS. All three accepted Origin https://example.com. For wallet 9akU... the subscriptions acked on solanatracker and vibestation, but no notifications arrived in 20s because the wallet was idle (its last tx was about 50 min earlier). Delivery was verified by subscribing to the busy PumpSwap program instead. publicnode did not ack the wallet subscription within 20s in one run but worked in the next, so treat it as intermittent and fail over. Flow: on each logsNotification signature, call getTransaction (maxSupportedTransactionVersion:1) to decode the trade. logsSubscribe mentions takes only ONE address per subscription."
+   },
+   {
+    "need": "Token/pool trade history (for trades tab) via RPC",
+    "endpoint": "POST https://solana-rpc.publicnode.com getSignaturesForAddress [pool GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT] then getTransaction per sig (or batch on solanatracker)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "As above. publicnode allows only 1 getTransaction per batch; solanatracker and vibestation allow several.",
+    "sample_fields": "Per tx: logMessages 'Instruction: Buy|Sell' (+ 'RouteV2'/'Swap' when routed via an aggregator); token delta = postTokenBalances[owner==signer && mint==8oEz...pump].uiTokenAmount.uiAmountString minus pre; signer = transaction.message.accountKeys[0].pubkey",
+    "notes": "3 latest pool sigs decoded: a v1 tx (Sell, -33542.84 tokens) and two v0 txs (Sell routed, -407956.79 tokens; Swap). This gives a keyless substitute for PumpPortal's key-gated subscribeTokenTrade: logsSubscribe mentions:[pool] plus getTransaction."
+   }
+  ]
+ },
+ {
+  "results": [
+   {
+    "need": "Historical trades for a token (full history, trader wallet, side, amount, time)",
+    "endpoint": "GET https://datapi.jup.ag/v1/txs/{mint}?offset={next}  (e.g. /v1/txs/8oEzj8zg9bnXfcCEwqfstwJe8AoEtJdWZaCDww6Dpump)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No rate-limit headers. A burst of 25 back-to-back requests all returned 200. cache-control: public, max-age=5.",
+    "sample_fields": "txs[].traderAddress, txs[].type ('buy'|'sell'), txs[].amount (token units), txs[].nativeVolume (SOL), txs[].usdVolume, txs[].usdPrice, txs[].timestamp (ISO), txs[].txHash, txs[].poolId, txs[].actionId, txs[].isMev, txs[].holderTags (e.g. ['insider','sniper']); top-level next (cursor)",
+    "notes": "BEST SOURCE. Undocumented internal API used by jup.ag, so it could change without notice. Echoes the request Origin back in Access-Control-Allow-Origin, with Vary: Origin and allow-credentials true. 30 trades per page; asking for more via limit has no effect. To page back, pass the response's next value as ?offset=<next> (the cursor, before and next params are ignored). Paging back 48 pages reached the very first trade (a creator buy by 9akUAs\u2026 at 2026-10-03T13:16:45Z, 2.864 SOL), so the history is complete. It covers BOTH the pump.fun bonding curve (poolId equals the mint) and the PumpSwap pool after migration (poolId GuwoKCn33\u2026). Trade 4N2Jdad\u2026 matched GeckoTerminal and on-chain exactly (sell of 33542.844272 tokens for 0.000838818 SOL)."
+   },
+   {
+    "need": "Trades for a token filtered to one wallet (my trades / dev trades)",
+    "endpoint": "GET https://datapi.jup.ag/v1/txs/{mint}?traderAddress={wallet}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Same as datapi above",
+    "sample_fields": "Same shape: txs[].traderAddress, type, amount, nativeVolume, usdVolume, timestamp, txHash; next is null when there are no more pages",
+    "notes": "For wallet 9akUAsfojYqigRJSyxGJbvjjbnSBwEusr8Hroh3qZp7t on the HATCH mint it returned 4 trades, from 13:16:45 to 13:19:53, tagged insider/sniper. The 'trader=' param is ignored; only 'traderAddress=' filters."
+   },
+   {
+    "need": "Recent trades for a pool",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/trades",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Public limit is about 30 calls/min, and in practice it is aggressive: many 429s with retry-after: 0, which cleared after 10-40 s of backoff. cache-control max-age=30.",
+    "sample_fields": "data[].attributes.tx_from_address (trader), .kind ('buy'|'sell'), .from_token_address, .to_token_address, .from_token_amount, .to_token_amount, .volume_in_usd, .price_from_in_usd, .price_to_in_usd, .block_timestamp (ISO), .block_number, .tx_hash",
+    "notes": "Access-Control-Allow-Origin: *. Hard cap: the latest 300 trades from the past 24h, with NO pagination. On this busy pool 300 trades covered only about 52 minutes. Good for a live trades tape, not for deep history. Optional params: trade_volume_in_usd_greater_than=N works. token=quote flips the perspective (kind and from/to are then relative to SOL)."
+   },
+   {
+    "need": "Find all pools for a token (bonding curve + migrated pool) so you can pull trades for each",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/pools",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Same GeckoTerminal public limit (~30/min, frequent 429)",
+    "sample_fields": "data[].attributes.address, data[].relationships.dex.data.id ('pump-fun'|'pumpswap'), data[].attributes.pool_created_at",
+    "notes": "Returned the bonding-curve pool 5cLJ4smwXRBnm51Mz6j5pyZrzasiCMk5XJmn8kjiFPu1 (pump-fun, created 13:16:45Z) and GuwoKCn33\u2026 (pumpswap, created 13:56:18Z)."
+   },
+   {
+    "need": "Trades on the pump.fun bonding-curve pool (before migration)",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/pools/5cLJ4smwXRBnm51Mz6j5pyZrzasiCMk5XJmn8kjiFPu1/trades",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Same GeckoTerminal public limit",
+    "sample_fields": "Same as pool trades: data[].attributes.tx_from_address, kind, from/to_token_amount, block_timestamp, tx_hash",
+    "notes": "Works, but with the same 300-trade cap: it covered only the last 6 minutes of the curve (13:49:50 to 13:56:17), not the whole curve. Use Jupiter datapi for full history."
+   },
+   {
+    "need": "Token-level trades (all pools)",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/trades",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 401 Unauthorized (the header was ACAO *). This route is paid/Pro only."
+   },
+   {
+    "need": "Trades via the GeckoTerminal web-app internal API",
+    "endpoint": "GET https://app.geckoterminal.com/api/p1/solana/pools/{pool}/swaps?include=from_token,to_token",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 400 {\"errors\":[{\"status\":\"400\"}]}, with no Access-Control-Allow-Origin header. Not usable."
+   },
+   {
+    "need": "Pool trades via CoinGecko onchain (public host)",
+    "endpoint": "GET https://api.coingecko.com/api/v3/onchain/networks/solana/pools/{pool}/trades",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 401: 'Requests without API key are not allowed for this endpoint'. Use api.geckoterminal.com instead (same data, no key)."
+   },
+   {
+    "need": "Raw on-chain history for a pool/token/wallet (signatures) to derive trades",
+    "endpoint": "POST https://solana-rpc.publicnode.com  {method:getSignaturesForAddress, params:[address,{limit:1000,before:sig}]}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No rate-limit headers. 4 consecutive 1000-signature pages took about 2 s each.",
+    "sample_fields": "result[].signature, result[].blockTime (unix), result[].slot, result[].err",
+    "notes": "ACAO *. Works for the pool, the mint and wallet 9akUAs\u2026. Paginate with before=<last signature>. Batch arrays work for light methods (getSlot). The node keeps only about 300k slots (first available block 452669640, about 33h), so older blocks and transactions return 'cleaned up'. Signatures include non-trade and failed txs, so filter on err==null and parse each one."
+   },
+   {
+    "need": "Parse a trade from a transaction (trader, side, amounts, time)",
+    "endpoint": "POST https://solana-rpc.publicnode.com  {method:getTransaction, params:[sig,{encoding:'jsonParsed',maxSupportedTransactionVersion:1}]}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Batch limit: 'Maximum number of getTransaction calls in a batch request is 1', so it is one request per tx. Retention is about 33h.",
+    "sample_fields": "result.blockTime, result.slot, result.transaction.message.accountKeys[signer==true].pubkey (trader), result.meta.preTokenBalances/postTokenBalances[].{owner,mint,uiTokenAmount.uiAmountString} (deltas give side + amounts), result.meta.fee, result.meta.err",
+    "notes": "MUST pass maxSupportedTransactionVersion:1. With 0 you get error -32015, because pump txs are now version 1. Token-balance deltas for 4N2Jdad\u2026 reproduced the trade exactly: trader 6zfXaq\u2026 -33542.844272 HATCH, pool -0.000849267 WSOL. This is a viable fallback for live/recent trades, but too slow for bulk history (one call per tx)."
+   },
+   {
+    "need": "Public RPC (official) for signatures/transactions",
+    "endpoint": "POST https://api.mainnet-beta.solana.com",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "It returns 403 'Access forbidden' to ANY request carrying an Origin header (tested example.com, localhost:3000, foo.netlify.app; even getSlot), although it sends ACAO * and x-ratelimit-* headers. The same calls work WITHOUT Origin (server-side only). Not usable from a browser."
+   },
+   {
+    "need": "Alternate free RPC for signatures/transactions",
+    "endpoint": "POST https://rpc.solanatracker.io/public",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No headers observed",
+    "sample_fields": "Standard JSON-RPC getSignaturesForAddress / getTransaction results",
+    "notes": "ACAO *. getSignaturesForAddress and getTransaction (v1) both worked. Very short retention: first available block 452907346, about 7h back. Backup only."
+   },
+   {
+    "need": "Alternate free RPC",
+    "endpoint": "POST https://solana.drpc.org",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 400 'chain is not available on free plan, please upgrade to paid plan'."
+   },
+   {
+    "need": "Alternate free RPC",
+    "endpoint": "POST https://rpc.ankr.com/solana",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 403 'API key is not allowed to access blockchain' (a key is needed for Solana)."
+   },
+   {
+    "need": "Alternate free RPC",
+    "endpoint": "POST https://solana.api.onfinality.io/public",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "x-ratelimit-limit-sec: 1; the first call already got a 429",
+    "sample_fields": "",
+    "notes": "HTTP 429 'Too Many Requests, Please apply an OnFinality API key'. Unusable."
+   },
+   {
+    "need": "Alternate free RPC",
+    "endpoint": "POST https://endpoints.omniatech.io/v1/sol/mainnet/public",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 521 (origin down)."
+   },
+   {
+    "need": "Alternate free RPCs",
+    "endpoint": "POST https://solana.blockpi.network/v1/rpc/public | https://api.blockeden.xyz/solana/mainnet | https://mainnet.helius-rpc.com",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "blockpi 503 'Apikey not found'; blockeden 401 'missing access key'; helius 401 Unauthorized. All need keys."
+   },
+   {
+    "need": "Alternate free RPCs",
+    "endpoint": "POST https://solana-mainnet.rpc.extrnode.com | https://solana.therpc.io",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "Connection failed (curl status 000, no response)."
+   },
+   {
+    "need": "Pool stats / trade counts",
+    "endpoint": "GET https://api.dexscreener.com/latest/dex/pairs/solana/{pool}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Documented 300 req/min for pair endpoints (no headers seen)",
+    "sample_fields": "pairs[0].txns.{m5,h1,h6,h24}.{buys,sells}, pairs[0].pairCreatedAt, pairs[0].baseToken, pairs[0].dexId",
+    "notes": "ACAO *. Returns NO individual trades, only aggregate buy/sell counts. Useful for header stats, not for the trades list."
+   },
+   {
+    "need": "Individual trades from DexScreener internal log",
+    "endpoint": "GET https://io.dexscreener.com/dex/log/amm/v4/pumpswap/all/solana/{pool}?q={quoteMint}",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 403 Cloudflare 'Attention Required' challenge page, with no ACAO header."
+   },
+   {
+    "need": "Pool/token trades via Birdeye",
+    "endpoint": "GET https://public-api.birdeye.so/defi/txs/pair?address={pool} and /defi/txs/token?address={mint}",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "Both HTTP 401 {\"success\":false,\"message\":\"Unauthorized\"} (the headers include ACAO * and x402 PAYMENT-* exposure). A key or payment is required."
+   },
+   {
+    "need": "Token trades via GMGN",
+    "endpoint": "GET https://gmgn.ai/defi/quotation/v1/trades/sol/{mint} and https://gmgn.ai/api/v1/token_trades/sol/{mint}",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "Both HTTP 403 Cloudflare challenge, with no ACAO header."
+   },
+   {
+    "need": "Token swaps via Moralis",
+    "endpoint": "GET https://solana-gateway.moralis.io/token/mainnet/{mint}/swaps",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 401 'Missing api key.'"
+   },
+   {
+    "need": "Pair trades via Mobula",
+    "endpoint": "GET https://api.mobula.io/api/1/market/trades/pair?address={pool}&blockchain=solana",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 403 'API access is unavailable on the Free plan'."
+   },
+   {
+    "need": "Pool transactions via DexPaprika",
+    "endpoint": "GET https://api.dexpaprika.com/networks/solana/pools/{pool}/transactions",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": true,
+    "rate_limit": "ratelimit-limit: 10 (keyless tier)",
+    "sample_fields": "",
+    "notes": "HTTP 403 {\"error\":\"plan_required\",\"tier\":\"keyless\",\"required_tier\":\"dev\"}. No ACAO header on the error."
+   },
+   {
+    "need": "Token DeFi activities via Solscan (web API)",
+    "endpoint": "GET https://api-v2.solscan.io/v2/token/defi/activities?address={mint}",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 403 Cloudflare challenge. ACAO is pinned to https://solscan.io, so other origins are not allowed."
+   },
+   {
+    "need": "Token DeFi activities via Solscan Pro",
+    "endpoint": "GET https://pro-api.solscan.io/v2.0/token/defi/activities?address={mint}",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 401 'Token is missing'."
+   },
+   {
+    "need": "Wallet transfers via SolanaFM",
+    "endpoint": "GET https://api.solana.fm/v0/accounts/{wallet}/transfers",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 502 'error code: 502' (service down)."
+   },
+   {
+    "need": "Token trades via Solana Tracker data API",
+    "endpoint": "GET https://data.solanatracker.io/trades/{mint}",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 401 'API key is required' (ACAO echoes the origin)."
+   },
+   {
+    "need": "Pair info/trades via Axiom's own API",
+    "endpoint": "GET https://api.axiom.trade/pair-info?pairAddress={pool}",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 425 with an empty body and no ACAO header. It needs Axiom session auth and is not usable."
+   },
+   {
+    "need": "Token trades via pump.fun frontend API",
+    "endpoint": "GET https://frontend-api-v3.pump.fun/trades/all/{mint}?limit=&offset=&minimumSize=0",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "With Origin it returns HTTP 403 'Not allowed by CORS' (origin allowlist). Without Origin it returns 400 because it now requires a chainId param (solana:<genesis>). Browsers cannot use it either way."
+   },
+   {
+    "need": "Token trades via pump.fun swap API",
+    "endpoint": "GET https://swap-api.pump.fun/v2/coins/{mint}/trades",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "",
+    "notes": "HTTP 403 'CORS Error: Origin not allowed'."
+   }
+  ]
+ },
+ {
+  "results": [
+   {
+    "need": "Trending discover list (multi-interval stats in one call)",
+    "endpoint": "GET https://lite-api.jup.ag/tokens/v2/toptrending/{5m|1h|6h|24h}?limit=N",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "25 rapid calls all returned 200 with no rate-limit headers. cache-control max-age=5.",
+    "sample_fields": "Top-level array of tokens. [i].id (mint), .symbol, .name, .icon, .usdPrice, .mcap, .fdv, .liquidity, .holderCount, .launchpad ('pump.fun', 'letsbonk.fun', 'stonkfun', ...), .graduatedPool, .graduatedAt, .firstPool.createdAt, .organicScore, .organicScoreLabel, .isVerified, .tags[], .audit{mintAuthorityDisabled, freezeAuthorityDisabled, topHoldersPercentage, devMints, devMigrations}, .twitter/.website/.telegram. Per interval: .stats5m/.stats1h/.stats6h/.stats24h{priceChange (percent), buyVolume, sellVolume, buyOrganicVolume, numBuys, numSells, numTraders, numNetBuyers, holderChange, liquidityChange, volumeChange}",
+    "notes": "Best single source because every token carries 5m, 1h, 6h and 24h stats together. Volume = buyVolume + sellVolume. limit is capped at 100 (asking for 200 returned 100). An invalid interval such as 15m returns HTTP 200 with body {status:400,'Invalid interval provided.'}, so check the body, not just the HTTP status. The list mixes in majors (SOL, JUP, PENGU, cbBTC); filter with launchpad != null or tags. ACAO echoes the request origin and allows credentials; the preflight returns 204."
+   },
+   {
+    "need": "Top by organic score",
+    "endpoint": "GET https://lite-api.jup.ag/tokens/v2/toporganicscore/{5m|1h|6h|24h}?limit=N",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Same as above (no 429 seen)",
+    "sample_fields": "Same token schema as toptrending: [i].id, .usdPrice, .mcap, .stats5m..stats24h.priceChange, .organicScore, .launchpad",
+    "notes": "Tested 5m (limit=50) and 6h (limit=100); both 200. In the 5m list, 25 of 50 tokens were pump.fun."
+   },
+   {
+    "need": "Top traded by volume",
+    "endpoint": "GET https://lite-api.jup.ag/tokens/v2/toptraded/{interval}?limit=N",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 seen",
+    "sample_fields": "Same token schema; sort is by traded volume",
+    "notes": "24h is dominated by majors (PUMP, cbBTC, ZEC, STONK, HYPE), so filter by launchpad for a memecoin view."
+   },
+   {
+    "need": "Newly created tokens feed (Axiom 'New Pairs' column)",
+    "endpoint": "GET https://lite-api.jup.ag/tokens/v2/recent",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 seen; cache-control max-age=5",
+    "sample_fields": "Array of 30. [i].id, .name, .symbol, .icon, .dev (creator wallet), .launchpad (26 of 30 were 'pump.fun'), .firstPool{id, createdAt}, .usdPrice, .mcap, .liquidity, .holderCount, .stats5m..stats24h{priceChange, buyVolume, sellVolume, numBuys, numSells}, .audit{devBalancePercentage, devMigrations, devMints}, .organicScore, .twitter/.website (optional)",
+    "notes": "Brand-new tokens, seconds old. Some entries have no usdPrice, mcap, stats or icon yet (27 of 30 had them), so code must handle missing fields. No limit parameter is needed (it returns 30)."
+   },
+   {
+    "need": "Token lookup by mint/symbol, batch",
+    "endpoint": "GET https://lite-api.jup.ag/tokens/v2/search?query={mint|symbol|comma-separated mints}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 seen",
+    "sample_fields": "Same token schema. For 8oEzj8...Dpump: symbol HATCH, launchpad 'pump.fun', graduatedPool 'GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT', graduatedAt, dev '9akUAsfojYqigRJSyxGJbvjjbnSBwEusr8Hroh3qZp7t', usdPrice ~2.99e-6, stats1h.priceChange -95.49",
+    "notes": "Comma-separated mints work (HATCH plus SOL returned 2). Searching by text ('hatch') returns 20. The graduatedPool field confirms the PumpSwap pool for migrated pump.fun tokens."
+   },
+   {
+    "need": "Batch price",
+    "endpoint": "GET https://lite-api.jup.ag/price/v3?ids={mint,mint}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 seen",
+    "sample_fields": "{<mint>: {usdPrice, priceChange24h, liquidity, decimals, blockId, createdAt, launchpad}}",
+    "notes": "Lightweight; good for polling prices on a watchlist."
+   },
+   {
+    "need": "Tag lists (verified / lst)",
+    "endpoint": "GET https://lite-api.jup.ag/tokens/v2/tag?query={verified|lst}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 seen",
+    "sample_fields": "Array of full token objects",
+    "notes": "The verified tag returns about 5.3 MB, too heavy for a browser. Not useful for memecoin discovery."
+   },
+   {
+    "need": "Same Jupiter tokens API on main gateway (keyless)",
+    "endpoint": "GET https://api.jup.ag/tokens/v2/toptrending/1h?limit=5",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Exposes x-ratelimit-remaining: 4 and x-ratelimit-reset, so the keyless allowance is very small",
+    "sample_fields": "Same schema",
+    "notes": "Works without a key but is heavily throttled. Use lite-api.jup.ag instead."
+   },
+   {
+    "need": "Trending pools with 5m/15m/30m/1h/6h/24h change + volume + txns",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?duration={5m|1h|6h|24h}&page=N&include=base_token",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "SEVERE. Keyless, the same IP got HTTP 429 after 2 back-to-back calls and still hit intermittent 429s at 12 to 20 s spacing; about 3 to 5 calls per minute is the practical budget. The 429 response has NO Access-Control-Allow-Origin header, so in a browser it appears as a CORS/network error, not a readable 429. A 200 response has cache-control max-age=30.",
+    "sample_fields": "data[i].attributes{name 'SOCKET / SOL', address, base_token_price_usd, market_cap_usd, fdv_usd, reserve_in_usd, pool_created_at, price_change_percentage{m5,m15,m30,h1,h6,h24} (strings), volume_usd{m5,m15,m30,h1,h6,h24} (strings), transactions{m5..h24:{buys,sells,buyers,sellers}}}; data[i].relationships.dex.data.id ('pumpswap','pump-fun','meteora','raydium'); relationships.base_token.data.id 'solana_<mint>'; with include=base_token, included[] has {address,symbol,name,image_url}",
+    "notes": "Returns 20 per page. duration=5m, 1h, 6h and 24h (page=2) all returned 200 when not throttled. Numbers come back as strings, so parse them. Has the richest set of intervals, but the rate limit makes it unfit as the main client-side feed; use it as a fallback or poll it slowly (one call per 30 s or more) and cache."
+   },
+   {
+    "need": "Pools sorted by volume / tx count",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/pools?sort={h24_volume_usd_desc|h24_tx_count_desc}&page=N",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Same severe GT limit; got 429 once, then 200 on retry",
+    "sample_fields": "Same pool schema as trending_pools",
+    "notes": "Top results are mostly SOL/USDC and majors, so filter by dex id (pumpswap, pump-fun)."
+   },
+   {
+    "need": "Pump-specific pool lists",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/dexes/{pumpswap|pump-fun}/pools?sort=h24_volume_usd_desc",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Same severe GT limit",
+    "sample_fields": "Same pool schema; 20 per page",
+    "notes": "pump-fun means bonding-curve pools, i.e. tokens that have not graduated yet (e.g. SPONGE / SOL 730k 24h volume). pumpswap means graduated pools. Good for Axiom-style 'Final Stretch' and 'Migrated' columns, given the rate limit."
+   },
+   {
+    "need": "New pools",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/new_pools",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Hit hardest: 429 on 4 attempts in a row and 200 only after waiting about 30 s",
+    "sample_fields": "data[i].attributes{name, pool_created_at, price_change_percentage, volume_usd, ...}, relationships.dex.data.id (mostly 'pump-fun')",
+    "notes": "20 per page, seconds-fresh. Jupiter /tokens/v2/recent is the better keyless choice."
+   },
+   {
+    "need": "Single pool detail (HATCH pumpswap pool)",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/pools/GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Severe GT limit (429 first try, 200 later)",
+    "sample_fields": "data.attributes{name 'HATCH / SOL', price_change_percentage{m5..h24}, volume_usd{m5..h24}, transactions, locked_liquidity_percentage (100.0), pool_fee_percentage, reserve_in_usd}",
+    "notes": "Adds locked_liquidity_percentage and pool_fee_percentage compared with the list endpoints."
+   },
+   {
+    "need": "Token detail + graduation status",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}?include=top_pools  |  /tokens/multi/{mint,mint}  |  /tokens/{mint}/pools",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Severe GT limit",
+    "sample_fields": "data.attributes{symbol, image_url, price_usd, fdv_usd, total_reserve_in_usd, volume_usd.h24, launchpad_details{graduation_percentage 100.0, completed true, completed_at, migrated_destination_pool_address 'GuwoKCn...NDRT'}}; /pools lists both 'pump-fun' and 'pumpswap' pools",
+    "notes": "Watch out: for HATCH the token-level price_usd was 0.0000488, about 16 times the pool price of 0.00000299, so it looks stale or comes from the old bonding-curve pool. Use pool-level prices for migrated tokens. launchpad_details.graduation_percentage could drive a bonding-curve progress bar."
+   },
+   {
+    "need": "OHLCV candles / trades",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/minute?aggregate=5&limit=N  |  /pools/{pool}/trades",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Severe GT limit (trades took 3 tries)",
+    "sample_fields": "ohlcv: data.attributes.ohlcv_list[[ts, o, h, l, c, volUsd]] newest first. trades: data[i].attributes{block_timestamp, tx_hash, tx_from_address, kind 'buy'|'sell', from_token_amount, to_token_amount, price_from_in_usd, volume_in_usd}; up to 300 rows",
+    "notes": "Out of scope for discover lists but works; listed for the token page."
+   },
+   {
+    "need": "Pool search",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/search/pools?query=hatch&network=solana",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Severe GT limit",
+    "sample_fields": "Same pool schema, 20 results",
+    "notes": "Works."
+   },
+   {
+    "need": "Cross-chain trending pools",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/trending_pools?duration=1h  (also /networks/new_pools)",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "Returned 429 on all 3 attempts at 20 s spacing; the 429 carries no ACAO header",
+    "sample_fields": "",
+    "notes": "Unverified: always rate-limited in testing. Not needed, since the Solana-specific endpoint works."
+   },
+   {
+    "need": "Most-boosted tokens (paid promo) as trending list",
+    "endpoint": "GET https://api.dexscreener.com/token-boosts/top/v1  (also /token-boosts/latest/v1)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "20 rapid calls all 200; no rate-limit headers (documented as 60 rpm)",
+    "sample_fields": "Array of 30: [i].chainId, .tokenAddress, .url, .icon, .header, .description, .links[{type,url}], .totalAmount (boost count); latest/v1 also has .amount",
+    "notes": "Multi-chain (22 of 30 were solana), so filter chainId=='solana'. Has no price or volume, so enrich with /tokens/v1 (below). Boosted means paid promotion, not organic trending. The preflight returns 204 with ACAO *."
+   },
+   {
+    "need": "Latest token profiles / community takeovers",
+    "endpoint": "GET https://api.dexscreener.com/token-profiles/latest/v1  |  /community-takeovers/latest/v1",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 seen (documented as 60 rpm)",
+    "sample_fields": "Array: [i].chainId, .tokenAddress, .icon, .header, .description, .links[]",
+    "notes": "30 profiles (20 solana) and 10 CTOs (8 solana). Metadata only, so enrich with /tokens/v1."
+   },
+   {
+    "need": "Batch enrichment: price change + volume for up to 30 mints",
+    "endpoint": "GET https://api.dexscreener.com/tokens/v1/solana/{mint1,mint2,...up to 30}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 seen (documented as 300 rpm)",
+    "sample_fields": "Array, one best pair per token: [i].baseToken{address,symbol,name}, .dexId ('pumpswap'), .pairAddress, .priceUsd, .priceNative, .priceChange{m5,h1,h6,h24}, .volume{m5,h1,h6,h24}, .txns{m5..h24:{buys,sells}}, .liquidity{usd}, .marketCap, .fdv, .pairCreatedAt (ms), .info{imageUrl, header, websites[], socials[]}, .boosts{active}",
+    "notes": "Passing 30 boosted or profile mints returned 30 pairs, one per token. For HATCH plus SOL it returned the HATCH/SOL pumpswap pair GuwoKCn...NDRT and the SOL/USDC orca pair. Keys inside priceChange and volume are sometimes missing (e.g. no m5 when there was no 5m activity), so default them to 0. Numbers are real numbers, not strings."
+   },
+   {
+    "need": "Free-text search",
+    "endpoint": "GET https://api.dexscreener.com/latest/dex/search?q={text}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "20 rapid calls all 200",
+    "sample_fields": "{schemaVersion, pairs[]} with the same pair schema as tokens/v1",
+    "notes": "Returns 30 pairs across all chains (q=pump gave 21 solana) and has no chain filter, so filter client-side."
+   },
+   {
+    "need": "Pair / all pools for a token",
+    "endpoint": "GET https://api.dexscreener.com/latest/dex/pairs/solana/{pair}  |  /token-pairs/v1/solana/{mint}  |  /latest/dex/tokens/{mint}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 seen",
+    "sample_fields": "pairs: {schemaVersion, pairs[], pair}; token-pairs: array of pairs, which for HATCH were [pumpswap GuwoKCn...NDRT, pumpfun 5cLJ4smwXRBnm51Mz6j5pyZrzasiCMk5XJmn8kjiFPu1]",
+    "notes": "Covers both the bonding-curve and migrated pools of a token."
+   },
+   {
+    "need": "Paid orders/profile status for a token",
+    "endpoint": "GET https://api.dexscreener.com/orders/v1/solana/{mint}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 seen",
+    "sample_fields": "{orders:[{type 'tokenProfile', status 'approved', paymentTimestamp}], boosts:[]}",
+    "notes": "Useful for a 'DEX paid' badge like Axiom's."
+   }
+  ]
+ },
+ {
+  "results": [
+   {
+    "need": "Pulse board columns (New / About to graduate / Graduated) across launchpads, filterable by launchpad",
+    "endpoint": "POST https://datapi.jup.ag/v1/pools/gems  body {\"recent\":{\"timeframe\":\"24h\",\"launchpads\":[...]},\"aboutToGraduate\":{...},\"graduated\":{...}}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 in a burst of 20 POSTs. No rate-limit headers. Undocumented internal endpoint used by the jup.ag frontend, so it may change.",
+    "sample_fields": "recent|aboutToGraduate|graduated .pools[] -> id (pool), dex, type (pumpfun|met-dbc|letsbonk.fun|meteora-damm-v2|raydium-cp-swaps|pumpfun-amm), createdAt, bondingCurve (% progress), liquidity, volume24h; .pools[].baseAsset -> id (mint), name, symbol, icon, dev, launchpad, metaLaunchpad, partnerConfig, graduatedPool, graduatedAt, mcap, fdv, usdPrice, holderCount, liquidity, stats5m/1h/6h/24h, audit{devMigrations,devMints,topHoldersPercentage,devBalancePercentage}, organicScore, isMayhem, twitter/website/telegram; .total",
+    "notes": "BEST SINGLE SOURCE. The OPTIONS preflight returns 204 with ACAO echoing the origin and allow-headers content-type. Launchpad filter values that returned live data on 2026-10-03: pump.fun, letsbonk.fun (metaLaunchpad raydium-launchlab, partnerConfig FfYek5vEz23cMkWsdJwG2oa6EphsvXSHrGpdALN4g6W1), raydium-launchlab, met-dbc (generic Meteora DBC), bags.fun (met-dbc, mints end BAGS), moonshot (now met-dbc, mints end moon), jup-studio (mints end jupx), stonkfun, forge. These returned graduated history only, with no new launches: boop (newest graduated 2025-10-10), moonit (2026-06-11), heaven (2025-08-30), daos.fun, time.fun, printr, wavebreak, virtuals. These returned 0 rows: boop.fun, Boop.fun, believe, believe.app, launchcoin, bonk, bonk.fun, letsbonk, jupstudio, zora, token-mill, anoncoin, sugar, bags. A multi-launchpad array works and mixes results. Each column returns 30 pools. The timeframe field did not appear to restrict the graduated column. The unfiltered recent column held 21 pump.fun, 4 met-dbc, 1 stonkfun and others. GET on the same path returns 404 (POST only)."
+   },
+   {
+    "need": "Most-recent new tokens feed with launchpad tag",
+    "endpoint": "GET https://lite-api.jup.ag/tokens/v2/recent",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 in a burst of 20. cache-control public, max-age=5",
+    "sample_fields": "[] -> id (mint), name, symbol, icon, dev, launchpad (pump.fun|met-dbc|raydium-launchlab|null), metaLaunchpad, partnerConfig, firstPool{id,createdAt}, graduatedPool, graduatedAt, mcap, fdv, usdPrice, liquidity, holderCount, stats5m..24h, audit{mintAuthorityDisabled,freezeAuthorityDisabled,devMigrations,devMints}, organicScore, tags, createdAt",
+    "notes": "Always returns 30 tokens covering about 1 minute (limit=100 is ignored). There is no launchpad filter. Mix: 20 pump.fun, 3 met-dbc, 2 raydium-launchlab, 5 null (plain AMM pools). ACAO echoes the origin, with credentials true."
+   },
+   {
+    "need": "Token lookup with launchpad and graduation info (sample mint)",
+    "endpoint": "GET https://lite-api.jup.ag/tokens/v2/search?query=8oEzj8zg9bnXfcCEwqfstwJe8AoEtJdWZaCDww6Dpump",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Same host as recent; no 429 observed",
+    "sample_fields": "[0].launchpad=pump.fun, [0].graduatedPool=GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT, [0].graduatedAt=2026-10-03T13:56:17Z, [0].dev=9akUAsfojYqigRJSyxGJbvjjbnSBwEusr8Hroh3qZp7t, [0].firstPool.createdAt, [0].stats1h.numBuys/numSells/numTraders/numOrganicBuyers, [0].audit.topHoldersPercentage",
+    "notes": "Correctly shows the sample mint as pump.fun graduated into the pumpswap pool GuwoK..., with dev = the sample wallet."
+   },
+   {
+    "need": "Same tokens API on the main host (keyless)",
+    "endpoint": "GET https://api.jup.ag/tokens/v2/recent",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Keyless: x-ratelimit-remaining starts at 4. Requests 6 to 8 of a burst of 8 returned 429.",
+    "sample_fields": "Same as lite-api",
+    "notes": "Use lite-api.jup.ag instead. The keyless quota on api.jup.ag is about 5 requests per window."
+   },
+   {
+    "need": "Jupiter token search via datapi",
+    "endpoint": "GET https://datapi.jup.ag/v1/assets/search?query=<mint>",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Not measured",
+    "sample_fields": "[] -> id, name, launchpad, metaLaunchpad, partnerConfig",
+    "notes": "For PumpPortal bonk mints (98sMh..., BLKKY...) it returned launchpad=null."
+   },
+   {
+    "need": "GeckoTerminal list of Solana dex ids (launchpad ids)",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/dexes",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Public free tier is very tight in practice. We got repeated 429s even at 1 call per 7 to 20 s, and other agents may share this IP. The 429 responses carry NO Access-Control-Allow-Origin header, so in a browser fetch throws a TypeError instead of a readable 429.",
+    "sample_fields": "data[].id, data[].attributes.name",
+    "notes": "Only page 1 exists (page=2 returns 400 'expected :page in 1..1'), with 35 dexes. Launchpad ids present: pump-fun, pumpswap, letsbonk-fun, raydium-launchlab, meteora-dbc, meteora-damm-v2, bags-fm, moonshot, boop-fun, moonit, heaven, daos-fun, virtuals-solana, token-mill, wavebreak, zora, clanker-solana, printr-v2, easya-kickstart, stonkfun, metadao."
+   },
+   {
+    "need": "GeckoTerminal newest pools (all dexes)",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/new_pools?include=dex,base_token",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Page 2 and page 3 returned 429 a few seconds after page 1; heavy throttling",
+    "sample_fields": "data[].attributes{address,name,pool_created_at,fdv_usd,market_cap_usd,price_change_percentage.m5..h24,transactions.m5..h24{buys,sells,buyers,sellers},volume_usd.m5..h24,reserve_in_usd}, data[].relationships.dex.data.id, data[].relationships.base_token.data.id; included[] token{address,name,symbol,image_url}",
+    "notes": "20 pools per page, covering about 15 s. Dex mix: 16 pump-fun, 2 meteora-dbc, 1 pumpswap, 1 meteora-damm-v2 (another sample: 13 pump-fun, 3 meteora-dbc, 3 meteora-damm-v2). A ?dex=meteora-dbc param is ignored (200 with mixed dexes). There is no server-side launchpad filter, so non-pump launchpads appear only rarely. image_url is often null."
+   },
+   {
+    "need": "GeckoTerminal newest pools per launchpad dex",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/dexes/{letsbonk-fun|raydium-launchlab|meteora-dbc|bags-fm|moonshot|boop-fun|pump-fun|heaven|moonit}/pools?sort=pool_created_at_desc",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Same GT throttling",
+    "sample_fields": "errors[0].title='Invalid sort option. Allowed values: h24_volume_usd_desc, h24_tx_count_desc'",
+    "notes": "400 for every dex (the 400 carries ACAO *). Per-dex pools CANNOT be sorted by creation time, so GT cannot drive a per-launchpad New column."
+   },
+   {
+    "need": "GeckoTerminal top pools per launchpad dex (validates dex ids)",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/dexes/{dex}/pools?sort=h24_tx_count_desc",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Needed up to 4 retries 30 s apart because of 429s",
+    "sample_fields": "data[].attributes.pool_created_at, name, volume_usd, transactions; relationships.dex.data.id",
+    "notes": "20 pools each, all with the matching dex id. Newest created_at among the top-20: letsbonk-fun 2026-10-03T03:03Z; raydium-launchlab 2026-10-03T14:26Z; meteora-dbc 2026-10-03T14:13Z; bags-fm 2026-10-03T14:25Z; moonshot 2026-10-03T15:04Z; boop-fun only 17 pools, newest 2025-09-18 (boop is effectively dead). Useful for a Trending view, not for New."
+   },
+   {
+    "need": "GeckoTerminal token info incl. launchpad/graduation",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/tokens/8oEzj8zg9bnXfcCEwqfstwJe8AoEtJdWZaCDww6Dpump/info  (also /tokens/{mint})",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "/tokens/{mint} needed a retry after a 429",
+    "sample_fields": "data.attributes.launchpad_details{graduation_percentage:100,completed:true,completed_at:'2026-10-03T13:56:17Z',migrated_destination_pool_address:'GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT'}, categories:['Pump Fun'], developer_address:'9akUAsfoj...', holders{count,distribution_percentage{top_10,...}}, gt_score, is_honeypot, mint_authority, freeze_authority",
+    "notes": "/info covers bonding progress and graduation for a single token. /tokens/{mint} also includes launchpad_details plus price_usd, fdv_usd, market_cap_usd."
+   },
+   {
+    "need": "GeckoTerminal pools for sample token / sample pool",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/tokens/8oEzj8zg9bnXfcCEwqfstwJe8AoEtJdWZaCDww6Dpump/pools ; GET .../networks/solana/pools/GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT?include=dex",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "GT throttling",
+    "sample_fields": "token pools: 2 pools, dex pump-fun (created 13:16:45Z) + pumpswap (created 13:56:18Z); pool: attributes{pool_created_at,fdv_usd,market_cap_usd,reserve_in_usd,locked_liquidity_percentage,pool_fee_percentage,transactions,volume_usd}",
+    "notes": "Both 200 with ACAO *."
+   },
+   {
+    "need": "Real-time pump.fun + bonk (LaunchLab) creates and migrations",
+    "endpoint": "wss://pumpportal.fun/api/data  send {\"method\":\"subscribeNewToken\"} and {\"method\":\"subscribeMigration\"}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Free data WS. One connection with two subscriptions worked fine. PumpPortal asks clients to reuse one connection.",
+    "sample_fields": "create(pump): signature, mint, traderPublicKey, txType='create', initialBuy, solAmount, bondingCurveKey, vTokensInBondingCurve, vSolInBondingCurve, marketCapSol, name, symbol, uri, is_mayhem_mode, pool='pump'. create(bonk): signature, mint, traderPublicKey, txType, initialBuy, solAmount, tokensInPool, newTokenBalance, marketCapSol, pool='bonk' (NO name/symbol/uri). migrate: signature, mint, txType='migrate', pool='pump-amm'",
+    "notes": "For WebSockets 'CORS' means the Origin check: the curl upgrade with Origin https://example.com got 101 Switching Protocols, and Node WebSocket with that Origin connected and streamed. Counts: 75 s gave 37 pump creates, 3 bonk creates and 1 migrate; 150 s gave 98 pump and 1 bonk. pool='bonk' means ANY Raydium LaunchLab create, not specifically letsbonk.fun. Bonk create tx 2HWtWhha86... invokes LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj (InitializeWithToken2022), but its mints (98sMhvDw..., BLKKYfF4...) were absent from the Raydium launch-mint API and had launchpad=null on Jupiter, so they were not letsbonk.fun-platform launches. PumpPortal has no Meteora DBC, bags, moonshot or boop streams. GET https://pumpportal.fun/api/data over HTTP returns 404 (WS only)."
+   },
+   {
+    "need": "Raydium LaunchLab new launches (letsbonk.fun and other LaunchLab platforms) with bonding progress",
+    "endpoint": "GET https://launch-mint-v1.raydium.io/get/list?sort=new&size=100&mintType=default&includeNsfw=false[&platformId=FfYek5vEz23cMkWsdJwG2oa6EphsvXSHrGpdALN4g6W1]",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 in a burst of 10",
+    "sample_fields": "data.rows[] -> mint, poolId, configId, creator, createAt (ms), name, symbol, imgUrl, metadataUrl, description, twitter, website, finishingRate (bonding %), marketCap, volumeA/B/U, supply, platformInfo{name,pubKey,web,img,feeRate}, configInfo{name,curveType,...}, migrateType; data.nextPageId",
+    "notes": "ACAO *. Allowed methods GET/POST/OPTIONS. 100 rows covered about 1 hour, with platform mix StonkFun 88, Raydium 4, unnamed 4, Ditto 1, stonk 1, Moonbase 1, letsbonk.fun 1. platformId=FfYek5... (the letsbonk.fun platform, matching Jupiter partnerConfig) filters to letsbonk only. The companion GET /get/by/mints?ids=<mint> works but returned 0 rows for the PumpPortal bonk mints."
+   },
+   {
+    "need": "DexScreener pair/token lookup (launchpad dexId tags)",
+    "endpoint": "GET https://api.dexscreener.com/latest/dex/pairs/solana/GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT ; GET https://api.dexscreener.com/token-pairs/v1/solana/{mint}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Documented at 300 req/min for pair/token endpoints; no 429 in about 11 calls",
+    "sample_fields": "pairs[] / [] -> dexId, labels, pairAddress, baseToken{address,symbol}, pairCreatedAt (ms), priceUsd, liquidity, fdv, marketCap, txns, volume",
+    "notes": "dexIds seen: pumpfun (bonding curve 5cLJ4smw... for the sample mint), pumpswap (GuwoK...), bags, meteoradbc (moonshot and generic DBC), meteora with label DYN2 (graduated bags), raydium with label CPMM (graduated letsbonk). It returned [] for a fresh letsbonk.fun curve token, a fresh raydium-launchlab token, a jup-studio token and a boop token. There is NO new-pairs list endpoint, so this only enriches tokens one at a time."
+   },
+   {
+    "need": "DexScreener latest token profiles",
+    "endpoint": "GET https://api.dexscreener.com/token-profiles/latest/v1",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Documented at 60 req/min",
+    "sample_fields": "[] -> url, chainId, tokenAddress, icon, description, links",
+    "notes": "Only tokens with paid profiles, so it is not a launch feed."
+   },
+   {
+    "need": "pump.fun native new-coins API",
+    "endpoint": "GET https://frontend-api-v3.pump.fun/coins/latest ; /coins?offset=0&limit=5&sort=created_timestamp&order=DESC&includeNsfw=false ; /coins/8oEzj8zg9bnXfcCEwqfstwJe8AoEtJdWZaCDww6Dpump",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "403 {message:'Not allowed by CORS'}",
+    "notes": "The server rejects a foreign Origin with 403, so it cannot be used from a static site."
+   },
+   {
+    "need": "pump.fun advanced board API",
+    "endpoint": "GET https://advanced-api-v2.pump.fun/coins/list?sortBy=creationTime&limit=5",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "HTTP 530 'error code: 1016'",
+    "notes": "Cloudflare origin DNS error; the host is dead."
+   },
+   {
+    "need": "Moonshot native API",
+    "endpoint": "GET https://api.moonshot.cc/token/v1/solana/{mint} ; GET https://api.moonshot.cc/tokens/v1/new/solana",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "curl: Could not resolve host",
+    "notes": "DNS does not resolve. Moonshot launches now run on Meteora DBC and are covered by Jupiter gems (launchpad=moonshot), GeckoTerminal dex moonshot and DexScreener dexId meteoradbc."
+   },
+   {
+    "need": "Boop native API",
+    "endpoint": "GET https://api.boop.fun/tokens?sort=new",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "Could not resolve host",
+    "notes": "Boop shows no new launches anywhere: GT boop-fun newest pool 2025-09-18; Jupiter gems has boop graduated history only."
+   },
+   {
+    "need": "Bags native API",
+    "endpoint": "GET https://public-api-v2.bags.fm/api/v1/token-launch/feed ; GET https://api2.bags.fm/api/v1/token-launch/feed",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "public-api-v2: 401 'API key is required. Please provide x-api-key header.' (ACAO *); api2: 403 'Origin not allowed'",
+    "notes": "Not usable without a key. Use Jupiter gems launchpad bags.fun instead (mints end BAGS)."
+   },
+   {
+    "need": "Meteora DBC native API (guessed paths)",
+    "endpoint": "GET https://dbc-api.meteora.ag/pools?limit=1 ; GET https://dammv2-api.meteora.ag/pools?limit=1",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "404",
+    "notes": "Guessed paths returned 404 and were not investigated further. Jupiter gems met-dbc/bags.fun/moonshot/jup-studio covers DBC."
+   },
+   {
+    "need": "On-chain verification of launch program (public RPC)",
+    "endpoint": "POST https://api.mainnet-beta.solana.com getTransaction ; POST https://solana-rpc.publicnode.com getTransaction",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Not measured",
+    "sample_fields": "result.transaction.message.accountKeys, result.meta.logMessages",
+    "notes": "api.mainnet-beta.solana.com returned 403 'Access forbidden' with the Origin header (it has ACAO *, but it is unusable for getTransaction). solana-rpc.publicnode.com returned 200 with ACAO * and was used to confirm PumpPortal bonk = LaunchLab program LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj."
+   },
+   {
+    "need": "ANSWER: which launchpads a free, static Pulse board can show",
+    "endpoint": "summary",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Primary sources (Jupiter lite-api, datapi gems, Raydium launch-mint, PumpPortal WS) showed no throttling. GeckoTerminal is heavily throttled and its 429s lack CORS headers.",
+    "sample_fields": "n/a",
+    "notes": "LIVE New/About-to-graduate/Graduated columns: pump.fun (PumpPortal WS realtime + Jupiter gems), letsbonk.fun (Jupiter gems 'letsbonk.fun' + Raydium launch-mint platformId FfYek5...), other Raydium LaunchLab platforms (gems 'raydium-launchlab', StonkFun via 'stonkfun'; PumpPortal pool='bonk' gives realtime creates for any LaunchLab platform but with no name or symbol), Meteora DBC generic ('met-dbc'), Bags ('bags.fun'), Moonshot ('moonshot', now on DBC), Jupiter Studio ('jup-studio'), Forge (sparse). GRADUATED HISTORY ONLY (no current launches): Boop, Moonit, Heaven, daos.fun, time.fun, Printr, Wavebreak, Virtuals. NOT AVAILABLE free: believe/launchcoin (no data under any tried name), Zora, Token Mill. Recommended stack: Jupiter datapi gems POST for all three columns with a launchpad filter; PumpPortal WS for instant pump.fun/LaunchLab creates and pump migrations; Raydium launch-mint for letsbonk.fun finishingRate; DexScreener token-pairs or GT /tokens/{mint}/info for per-token detail. Caveat: datapi.jup.ag is undocumented."
+   }
+  ]
+ },
+ {
+  "results": [
+   {
+    "need": "Candles (OHLCV) by pool, GeckoTerminal: limits, timeframes, paging",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool}/ohlcv/{minute|hour|day}?aggregate=&limit=&before_timestamp=&currency=usd|token&token=base|quote&include_empty_intervals=true",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "Public, no key, but frequently returned HTTP 429 at about one request every 2-10s from this IP (parallel agents may share it; the documented limit is about 30/min). The 429 body is from CoinGecko, carries NO Access-Control-Allow-Origin header (a browser sees an opaque CORS error) and has retry-after: 0. 200 responses are cache-control max-age=30, s-maxage=60. No x-ratelimit headers.",
+    "sample_fields": "data.attributes.ohlcv_list = [[ts_sec, open, high, low, close, volume_usd], ...] newest-first; meta.base{name,symbol,address}, meta.quote{symbol,address}",
+    "notes": "limit max 1000 (1001 returns 400 'must be ... <= 1000'). Allowed aggregates: minute 1/5/15, hour 1/4/12, day 1 (other values return 400, e.g. 'Allowed values: 1, 5, 15'). The timeframe=second endpoint returns 401 'exclusive to Paid plan'. before_timestamp (unix seconds) is EXCLUSIVE: before_timestamp=1790375820 returned newest 1790375760, so page backwards with before_timestamp=oldest_ts and no dedupe is needed. The public API only serves the past 180 days (older before_timestamp returns 401 'only access data from the past 180 days'); day returned 183 candles and hour limit=1000 went back about 41 days; minute data with before_timestamp 7 days back worked (1000 candles). By default only intervals with trades are returned (the HATCH pumpswap pool gave 48 candles); include_empty_intervals=true fills gaps with flat candles at the previous close with volume 0 (81 candles). currency=token returns SOL-denominated prices; token=quote returns the SOL/USD candles. Verified on the pumpswap pool GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT (HATCH/SOL, created 2026-10-03T13:56Z) and the Orca SOL/USDC pool Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE."
+   },
+   {
+    "need": "Do pump.fun bonding-curve pools (dex pump-fun) have OHLCV on GeckoTerminal",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/pools/5cLJ4smwXRBnm51Mz6j5pyZrzasiCMk5XJmn8kjiFPu1/ohlcv/minute?aggregate=1&limit=1000",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "same GeckoTerminal public limit (429 seen; retried after 20s)",
+    "sample_fields": "data.attributes.ohlcv_list [[ts,o,h,l,c,vol_usd]] newest-first",
+    "notes": "YES. The bonding-curve pool for 8oEz...pump is listed with relationships.dex.data.id='pump-fun' (pool created 13:16:45Z) and returned 41 one-minute candles from 13:16 to 13:56, ending at migration. The pumpswap pool starts at 13:56. GT OHLCV is per pool, so a migrated coin's full chart means stitching both pools. Find them with GET /api/v2/networks/solana/tokens/{mint}/pools (200, CORS *), which returns both pools (ids solana_5cLJ...=pump-fun and solana_Guwo...=pumpswap) with pool_created_at. Pool info is at GET /api/v2/networks/solana/pools/{pool} (200, CORS *)."
+   },
+   {
+    "need": "Candles by token mint, GeckoTerminal token-level OHLCV",
+    "endpoint": "GET https://api.geckoterminal.com/api/v2/networks/solana/tokens/{mint}/ohlcv/minute?aggregate=1&limit=1000",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "n/a",
+    "notes": "Returns 401 Unauthorized on the public API (paid only). Use the pool endpoint instead."
+   },
+   {
+    "need": "Candles by token mint, Jupiter (keyless, covers bonding curve plus migrated pool in one series)",
+    "endpoint": "GET https://datapi.jup.ag/v2/charts/{mint}?interval=1_MINUTE&to={unix_ms}&candles=N&type=price|mcap&quote=usd|native",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "No 429 in a 40-request rapid burst and no rate-limit headers. cache-control public, max-age=5. ACAO reflects the request Origin (https://example.com) with access-control-allow-credentials: true.",
+    "sample_fields": "candles[] = {time (unix sec), open, high, low, close, volume (USD for quote=usd)}, ascending oldest-first; the response has no other top-level keys",
+    "notes": "BEST keyless option. The series is keyed by mint, so for 8oEz...pump it spans 13:16 (bonding curve) to now (pumpswap) in one stream, with no stitching. Its volume matched GT's bonding-curve candle (~1762 vs 1760 USD). The 'to' param is REQUIRED and in milliseconds (omitting it returns 400; passing seconds returns an empty candles array). 'to' is exclusive (candles with time < to), so page backwards with to=oldest.time*1000. candles cap = 7000 (asking for 8000 or 10000 returned 7000). Intervals 1_SECOND, 15_SECOND, 30_SECOND, 1_MINUTE, 3_MINUTE, 5_MINUTE, 15_MINUTE, 30_MINUTE, 1_HOUR, 2_HOUR, 4_HOUR, 8_HOUR, 12_HOUR, 1_DAY, 1_WEEK and 1_MONTH all work; 3_DAY returns 400. type=mcap returns market-cap OHLC (2883 USD for HATCH); type=foo returns 400. quote=native returns SOL-denominated prices and volume; quote=sol returns 400 'Invalid quote.'. Deep history: SOL 1_MINUTE with to=200 days ago returned data, and 1_SECOND with to=30 days ago returned data. Gaps where there were no trades are skipped (not filled). This is an undocumented frontend data API, so it could change. The old routes fe-api.jup.ag/api/v1/charts/{mint} and datapi.jup.ag/v1/charts/{mint} return 404."
+   },
+   {
+    "need": "Jupiter pools for a mint (to find the pool and dex type)",
+    "endpoint": "GET https://datapi.jup.ag/v1/pools?assetIds={mint}",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "not hit",
+    "sample_fields": "pools[].id, .dex ('swap.pump.fun'), .type ('pumpfun-amm'), .quoteAsset, .createdAt, .liquidity, .volume24h, .baseAsset{id,name,...}",
+    "notes": "Returned the pumpswap pool GuwoKCn33WVKy2ptj92frc4wjQDDQzUCGJrLRnv8NDRT for 8oEz...pump. ACAO reflects the Origin."
+   },
+   {
+    "need": "Jupiter live price (latest-tick companion to candles)",
+    "endpoint": "GET https://lite-api.jup.ag/price/v3?ids={mint1},{mint2}  (also https://api.jup.ag/price/v3?ids= worked without a key)",
+    "works": true,
+    "cors_ok": true,
+    "auth_needed": false,
+    "rate_limit": "not hit",
+    "sample_fields": "{<mint>: {usdPrice, priceChange24h, liquidity, decimals, blockId, createdAt, launchpad:'pump.fun'}}",
+    "notes": "No OHLCV, but useful for live updates of the last candle. SOL usdPrice is about 119.55. ACAO reflects the Origin."
+   },
+   {
+    "need": "Birdeye OHLCV without key",
+    "endpoint": "GET https://public-api.birdeye.so/defi/ohlcv?address={mint}&type=1m&time_from=&time_to=  (also /defi/ohlcv/pair, /defi/v3/ohlcv, /defi/history_price, /defi/price; tried with and without the x-chain: solana header)",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "n/a",
+    "notes": "Every endpoint returns 401 {\"success\":false,\"message\":\"Unauthorized\"} without X-API-KEY. Headers are CORS * but it's unusable keyless."
+   },
+   {
+    "need": "pump.fun native candles",
+    "endpoint": "GET https://frontend-api-v3.pump.fun/candlesticks/{mint}?offset=0&limit=1000&timeframe=1 ; GET https://swap-api.pump.fun/v2/coins/{mint}/candles?interval=1m&limit=1000&currency=USD ; GET https://swap-api.pump.fun/v1/coins/{mint}/candles?...",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "n/a",
+    "notes": "All return 403 'Not allowed by CORS' / 'CORS Error: Origin not allowed' for a foreign Origin, so they're not usable from a static site."
+   },
+   {
+    "need": "DexScreener chart bars",
+    "endpoint": "GET https://io.dexscreener.com/dex/chart/amm/v3/pumpswap/bars/solana/{pool}?res=1&cb=300",
+    "works": false,
+    "cors_ok": false,
+    "auth_needed": false,
+    "rate_limit": "n/a",
+    "sample_fields": "n/a",
+    "notes": "403 Cloudflare HTML challenge with no ACAO. The public https://api.dexscreener.com/latest/dex/pairs/solana/{pool} returns 200 with CORS * but has only pair stats and priceChange, no candles."
+   },
+   {
+    "need": "Mobula pair OHLCV",
+    "endpoint": "GET https://api.mobula.io/api/1/market/history/pair?address={pool}&blockchain=solana&period=1m&amount=100",
+    "works": false,
+    "cors_ok": true,
+    "auth_needed": true,
+    "rate_limit": "n/a",
+    "sample_fields": "n/a",
+    "notes": "403 'API access is unavailable on the Free plan'."
+   }
+  ]
+ }
+]

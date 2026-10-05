@@ -1,0 +1,26 @@
+{
+  "name": "nought",
+  "version": "0.8.0",
+  "private": true,
+  "type": "module",
+  "description": "An open-source Solana terminal with zero Nought trading fees.",
+  "license": "MIT",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "preview": "node tools/preview.mjs",
+    "check": "node tools/check.mjs",
+    "test": "node --experimental-vm-modules --test tests/*.test.mjs",
+    "build": "node tools/build.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PiccoloNiccolo/nought.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PiccoloNiccolo/nought/issues"
+  },
+  "homepage": "https://github.com/PiccoloNiccolo/nought#readme"
+}

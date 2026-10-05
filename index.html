@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@solana/web3.js@1.98.0/lib/index.iife.min.js https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data: blob:; connect-src 'self' https: wss: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; frame-src 'self' https://platform.twitter.com https://syndication.twitter.com; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nought · zero-fee memecoin terminal</title>
+<meta name="description" content="An open-source memecoin terminal for Solana. Live pump.fun pairs, charts and one-click trades with 0% platform fees.">
+<meta name="theme-color" content="#07080b">
+<!-- where the status bar's "Source" link points; empty = the README served with this site -->
+<meta name="nought:repo" content="https://github.com/PiccoloNiccolo/nought">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://pump.mypinata.cloud" crossorigin>
+<link rel="preconnect" href="https://cdn.dexscreener.com" crossorigin>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap">
+<!-- apply the saved theme before first paint (src/ui/shell.js applies it again with the accent shades). On Light a custom
+     accent is mixed toward black in 5% steps until it reads 4.5:1 on white, as shell.js accentFor() does. -->
+<script src="src/ui/theme-init.js"></script>
+<link rel="stylesheet" href="style.css"><link rel="stylesheet" href="css/x-hover.css">
+<link rel="stylesheet" href="css/landing.css"><link rel="stylesheet" href="css/pulse.css"><link rel="stylesheet" href="css/token.css"><link rel="stylesheet" href="css/token-tabs.css">
+<link rel="stylesheet" href="css/discover.css"><link rel="stylesheet" href="css/portfolio.css"><link rel="stylesheet" href="css/track.css">
+<link rel="stylesheet" href="css/watch.css"><link rel="stylesheet" href="css/upkeep.css"><link rel="stylesheet" href="css/perps.css"><link rel="stylesheet" href="css/yield.css"><link rel="stylesheet" href="css/settings.css"><link rel="stylesheet" href="css/shell.css">
+</head>
+<body>
+<header class="top" id="top">
+  <button class="btn btn-ghost icon nav-menu" id="nav-menu" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="nav">
+    <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+  <a class="brand" href="#/" aria-label="Nought home">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="3.2"/><path d="M6.2 17.8 17.8 6.2" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round"/></svg>
+    <span>nought</span>
+  </a>
+  <nav class="tabs" id="nav" aria-label="Pages">
+    <a href="#/discover" data-tab="discover">Discover</a>
+    <a href="#/pulse" data-tab="pulse">Pulse</a>
+    <a href="#/track" data-tab="track">Trackers</a>
+    <a href="#/track/vision" data-tab="vision">Vision</a>
+    <a href="#/perps" data-tab="perps">Perps</a>
+    <a href="#/yield" data-tab="yield">Yield</a>
+    <a href="#/portfolio" data-tab="portfolio">Portfolio</a>
+    <a href="#/watch" data-tab="watch">Watchlist</a>
+    <a href="#/upkeep" data-tab="upkeep">Upkeep</a>
+    <a href="#/settings" data-tab="settings" class="nav-only-menu">Settings</a>
+    <button type="button" class="nav-only-menu nav-ticker" id="nav-ticker">Watchlist strip</button>
+    <button type="button" class="nav-only-menu" id="nav-pnl">Live PnL widget</button>
+  </nav>
+  <button class="search" id="search-open" type="button" aria-label="Search tokens (shortcut /)">
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <span class="s-long">Search coins or paste CA</span><span class="s-short" aria-hidden="true">Search</span><kbd>/</kbd>
+  </button>
+  <div class="top-right">
+    <span class="chip fee0" title="Nought adds no fee to any trade">0% fees</span>
+    <div class="presets-bar" id="presets" role="group" aria-label="Trade presets (keys 1, 2, 3)"></div>
+    <button class="btn btn-ghost icon top-ticker" id="ticker-toggle" type="button" aria-label="Watchlist strip" aria-pressed="true" title="Show or hide the watchlist strip"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3Z" fill="var(--f, none)" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
+    <button class="btn btn-ghost icon top-pnl" id="pnl-toggle" type="button" aria-label="Live PnL widget" aria-pressed="false" title="Show or hide the live PnL widget"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3.5 19.5h17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity=".45"/><path d="m4 15.5 4.5-5 3.5 3 6.5-7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 6h3.5v3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div class="pop-wrap" id="bell-wrap">
+      <button class="btn btn-ghost icon" id="bell-btn" type="button" aria-label="Notifications" aria-haspopup="dialog" aria-expanded="false" aria-controls="bell-pop"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16Zm4 4a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg><span class="badge" id="bell-badge" hidden></span></button>
+      <div class="pop bell-pop" id="bell-pop" role="dialog" aria-label="Notifications" hidden></div>
+    </div>
+    <a class="btn btn-ghost icon top-gear" id="settings-btn" href="#/settings" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1c.5.4 1.1.8 1.7 1l.4 2.5h4l.4-2.5c.6-.2 1.2-.6 1.7-1l2.4 1 2-3.4-2-1.6ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1)"/></svg></a>
+    <div class="pop-wrap" id="wallet-wrap">
+      <button class="wpill" id="wallet-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="wallet-menu">Connect</button>
+      <div class="pop wmenu" id="wallet-menu" role="menu" aria-label="Wallet" hidden></div>
+    </div>
+  </div>
+</header>
+
+<div class="ticker" id="ticker" hidden>
+  <div class="tk-viewport" id="tk-viewport"><div class="tk-track" id="tk-track"></div></div>
+  <button class="tk-x" id="tk-hide" type="button" aria-label="Hide the watchlist strip" title="Hide (bring it back with the star in the top bar)"><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+</div>
+
+<main id="view"></main>
+
+<footer class="status" id="status">
+  <span class="st-conn">
+    <span class="st-i" id="st-pp" title="pump.fun launch stream"><i class="dot" id="feed-dot"></i><span class="st-l">Stream</span></span>
+    <span class="st-i" id="st-jup" title="Jupiter Pulse feed"><i class="dot" id="dot-jup"></i><span class="st-l">Jupiter</span></span>
+    <span class="st-i" id="st-rpc" title="Solana RPC"><i class="dot" id="dot-rpc"></i><span class="st-l">RPC</span></span>
+  </span>
+  <span class="st-feed" id="feed-text">Connecting to pump.fun…</span>
+  <span class="st-mkts mono" id="st-mkts" hidden></span>
+  <button class="st-chip mono" id="st-preset" type="button" title="Active trade preset: click to edit"></button>
+  <span class="st-saved mono" id="st-saved" title="What a typical 1% terminal fee would have cost on trades made in this browser"></span>
+  <span class="sep"></span>
+  <a class="st-link" id="st-source" href="README.md" target="_blank" rel="noopener">Source</a>
+  <a class="st-link" href="#/upkeep">Docs</a>
+  <span class="st-fee0" title="Nought adds no fee to any trade">0% fees</span>
+</footer>
+
+<dialog id="settings" aria-labelledby="qs-title"><form method="dialog" class="dlg"><div class="dlg-top"><h2 id="qs-title">Trade presets</h2><a class="dlg-link" href="#/settings/presets" data-close>All settings</a></div><div class="dlg-body"></div><div class="row-end"><button class="btn btn-accent" value="ok">Done</button></div></form></dialog>
+<dialog id="wallets" aria-labelledby="wp-title"><form method="dialog" class="dlg"><h2 id="wp-title" tabindex="-1" autofocus>Connect a wallet</h2><p class="hint">Nought never sees your keys. Your wallet signs and sends every trade.</p><div class="wallet-list" id="wallet-list"></div><div class="row-end"><button class="btn btn-ghost" value="cancel">Cancel</button></div></form></dialog>
+<dialog id="search-dlg" class="search-dlg" aria-label="Search tokens">
+  <div class="sdlg">
+    <div class="sq">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input id="search-q" type="text" placeholder="Name, ticker or CA" spellcheck="false" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="search-out" aria-autocomplete="list" aria-label="Search tokens">
+      <button class="btn btn-ghost sm" id="search-paste" type="button" title="Paste a token address from the clipboard">Paste CA</button>
+      <button class="btn btn-ghost sm" id="search-close" type="button" aria-label="Close search">Esc</button>
+    </div>
+    <div class="s-bar"><div class="seg sm" id="search-sort" role="group" aria-label="Sort results"></div><span class="s-src" id="search-src"></span></div>
+    <div id="search-out" class="search-out" role="listbox" aria-label="Results"></div>
+  </div>
+</dialog>
+<dialog id="convert-dlg" class="cv-dlg" aria-labelledby="cv-title">
+  <div class="dlg cv">
+    <div class="dlg-top"><h2 id="cv-title">Convert SOL ⇄ USDC</h2><button class="btn btn-ghost icon" type="button" data-cv="close" aria-label="Close"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
+    <div id="cv-body" class="cv-body"></div>
+  </div>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<!-- pinned versions with Subresource Integrity (hashes match the npm tarballs): a changed file on the CDN won't run -->
+<script src="https://cdn.jsdelivr.net/npm/@solana/web3.js@1.98.0/lib/index.iife.min.js" integrity="sha384-1/Ll6ABlJDlMx1URcif2stL9Fxod/1rg71YHzGqTl6Bwzi0Vq993Jt/oVLFXfUgQ" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js" integrity="sha384-OK7vELvjHdhUFi31JYioPIcRHTROLdcDa6ZsNWgvgLaKj+9JqhU0Ad8g4wz3CXjA" crossorigin="anonymous"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,199 @@
+/* Nought: a dense, dark trading terminal. One palette, set here.
+   This file holds only the design tokens, the base reset and the components every page shares (buttons, chips,
+   segmented controls and their one selected look, .subtabs, the .hfade scroll fade, .eyebrow labels, .empty-state and
+   .skel, the coin avatar and quick-buy button, dialogs, toasts). Page styles live in css/<page>.css,
+   scoped under the page's root class; the frame (top bar, watchlist strip, status bar, search) is in css/shell.css.
+   Generic names that pages also use for their own bits (.page, .empty, .pulse-dot, .sym, .nm, .copy, .age, .soc, .l1,
+   .l2, .flag) are wrapped in :where(): zero specificity, so any page rule beats them. */
+/* Themes: Nought Dark is the default. Grey, OLED and Light only redefine tokens, so every page follows them.
+   A custom accent (Settings > Display) is set inline on <html> as --accent / --accent-2 / --accent-ink; on Light it is
+   first darkened until it reads on white (src/ui/shell.js accentFor, mirrored in index.html's pre-paint script).
+   src/ui/shell.js emits util 'theme' after every change, for code that needs resolved colours (charts). */
+:root {
+  --bg: #101114; --panel: #141519; --panel-2: #1b1d23; --line: #25272e; --line-2: #333640;
+  --fg: #f1f2f6; --muted: #969baa; --dim: #747b8d;
+  --accent: #8c9dff; --accent-2: #7188f7; --accent-ink: #11152c;
+  --up: #61d5a4; --down: #f77d8b; --warn: #e7bc69;
+  --shadow: 0 12px 30px rgba(0, 0, 0, .45); --shadow-lg: 0 18px 44px rgba(0, 0, 0, .55); --backdrop: rgba(3, 4, 7, .7);
+  /* the one "selected" look for segmented controls and toggles: a tint, not a solid fill (solid accent is kept for
+     primary buttons, the active P1/P2/P3 and the theme/accent pickers) */
+  --sel-fg: var(--accent); --sel-bg: color-mix(in srgb, var(--accent) 14%, transparent); --sel-line: color-mix(in srgb, var(--accent) 45%, transparent);
+  /* control heights: page toolbars use --h for inputs, segments and buttons alike */
+  --h-sm: 26px; --h: 30px; --h-lg: 36px;
+  --radius: 8px; --row: 64px;
+  --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: dark;
+}
+:root[data-theme="grey"] {
+  --bg: #15171c; --panel: #1b1e24; --panel-2: #22262e; --line: #2b2f39; --line-2: #363b47;
+  --fg: #e9ebf0; --muted: #969cad; --dim: #666c7c;
+}
+:root[data-theme="oled"] {
+  --bg: #000; --panel: #040405; --panel-2: #0a0b0e; --line: #15171d; --line-2: #20232b;
+  --shadow: 0 12px 30px rgba(0, 0, 0, .7); --shadow-lg: 0 18px 44px rgba(0, 0, 0, .75); --backdrop: rgba(0, 0, 0, .78);
+}
+:root[data-theme="light"] {
+  --bg: #f3f4f7; --panel: #fff; --panel-2: #eceef2; --line: #e0e3e9; --line-2: #cdd2db;
+  --fg: #14161c; --muted: #596073; --dim: #737a8b;
+  --accent: #087893; --accent-2: #06657c; --accent-ink: #fff;
+  --up: #0a8752; --down: #dc3145; --warn: #95600c;
+  --shadow: 0 10px 28px rgba(20, 24, 34, .14); --shadow-lg: 0 16px 40px rgba(20, 24, 34, .16); --backdrop: rgba(20, 24, 34, .35);
+  --sel-fg: var(--accent-2); /* the accent on its own 14% tint is about 4.2:1 on white; the darker shade reads */
+  color-scheme: light;
+}
+
+/* ---- base. The element resets have zero specificity, so any class (ours or a page's) beats them. ---- */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.4 var(--sans); display: grid; grid-template-rows: auto auto 1fr auto; overflow: hidden; -webkit-font-smoothing: antialiased; }
+:where(a) { color: inherit; text-decoration: none; }
+:where(button) { font: inherit; color: inherit; cursor: pointer; }
+:where(input) { font: inherit; color: inherit; }
+::placeholder { font-family: var(--sans); color: var(--dim); opacity: 1; }
+.mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--muted); } .dim { color: var(--dim); }
+[hidden] { display: none !important; }
+.sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+kbd { font: 500 11px/1 var(--mono); padding: 3px 6px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--muted); }
+
+#view { min-height: 0; overflow: hidden; }
+/* narrow screens: the document scrolls rather than each page */
+@media (max-width: 900px) { body { overflow: auto; } #view { overflow: visible; } }
+/* a plain scrolling page (landing, upkeep, yield use it): prose defaults that the page's own rules always override */
+:where(.page) { height: 100%; overflow-y: auto; }
+:where(.page) h1 { margin: 0; font: 700 44px/1.02 var(--sans); letter-spacing: -.035em; text-wrap: balance; }
+:where(.page) h1 em { font-style: normal; color: var(--accent); }
+:where(.page) h2 { margin: 0 0 8px; font: 600 18px/1.2 var(--sans); }
+:where(.page) p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; max-width: 64ch; }
+@media (max-width: 700px) { :where(.page) h1 { font-size: 34px; } }
+
+/* ---- shared controls ---- */
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 7px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.chip.fee0 { color: var(--up); border-color: color-mix(in srgb, var(--up) 35%, transparent); background: color-mix(in srgb, var(--up) 8%, transparent); font-weight: 600; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 13px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel-2); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+.btn:hover { border-color: var(--dim); }
+.btn-accent { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn-accent:hover { background: color-mix(in srgb, var(--accent) 82%, #fff); border-color: color-mix(in srgb, var(--accent) 82%, #fff); }
+[data-theme="light"] .btn-accent:hover { background: var(--accent-2); border-color: var(--accent-2); } /* lighter would lose the white text */
+.btn-accent:focus-visible { outline-offset: 2px; } /* a gap between the accent fill and its ring, never a doubled border */
+.btn-ghost { background: transparent; }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.icon { width: 32px; padding: 0; }
+.btn.sm { height: var(--h-sm); padding: 0 9px; font-size: 11.5px; }
+.btn:focus-visible, .seg button:focus-visible, .qb:focus-visible, a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg { display: flex; gap: 5px; flex-wrap: wrap; }
+.seg button { height: var(--h); padding: 0 12px; border-radius: 6px; border: 1px solid var(--line-2); background: none; color: var(--muted); font: 500 12px/1 var(--mono); }
+.seg button:hover { color: var(--fg); }
+.seg button.on, .seg button[aria-pressed="true"] { color: var(--sel-fg); background: var(--sel-bg); border-color: var(--sel-line); }
+.seg.sm button { height: 24px; padding: 0 9px; font-size: 11.5px; }
+/* <div class="seg-fill c7"><div class="seg">…</div></div>: the options share the row in equal columns, so a row never
+   ends with one lonely button wrapped onto a second line. .two stacks a <small> under the label. */
+.seg-fill .seg { display: grid; grid-template-columns: repeat(var(--n, 5), minmax(0, 1fr)); gap: 4px; }
+.seg-fill.c2 { --n: 2; } .seg-fill.c3 { --n: 3; } .seg-fill.c4 { --n: 4; } .seg-fill.c5 { --n: 5; } .seg-fill.c7 { --n: 7; }
+.seg-fill .seg button { min-width: 0; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seg-fill.two .seg button { height: auto; min-height: 38px; padding: 5px 2px; display: grid; gap: 3px; align-content: center; line-height: 1.1; }
+.seg-fill.two .seg button small { font-size: 10px; opacity: .75; }
+/* page sub-tabs (Discover, Trackers, Portfolio, Settings on a phone): <nav class="subtabs"><a class="on">Spot <b>12</b></a></nav> */
+.subtabs { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.subtabs::-webkit-scrollbar { display: none; }
+.subtabs > a, .subtabs > button { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: 600 12.5px/1 var(--sans); white-space: nowrap; flex: none; }
+.subtabs > :hover { color: var(--fg); }
+.subtabs > .on { color: var(--fg); background: var(--panel-2); }
+.subtabs > .on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px; border-radius: 1px; background: var(--accent); }
+.subtabs b { color: var(--dim); font: 500 10.5px/1 var(--mono); }
+/* a horizontal scroller that shows a soft shadow at whichever edge hides more: the covers scroll with the content
+   (local), the shadows stay put (scroll). Set --hf to the background the row sits on. */
+.hfade { --hf: var(--panel); background:
+  linear-gradient(90deg, var(--hf) 30%, transparent) left / 24px 100% no-repeat local,
+  linear-gradient(270deg, var(--hf) 30%, transparent) right / 24px 100% no-repeat local,
+  radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--fg) 16%, transparent), transparent) left / 10px 100% no-repeat scroll,
+  radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--fg) 16%, transparent), transparent) right / 10px 100% no-repeat scroll,
+  var(--hf); }
+/* a section or stat label; the value under it stays mono */
+.eyebrow { font: 600 10.5px/1.2 var(--sans); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.row-end { display: flex; justify-content: flex-end; gap: 8px; }
+:where(.flag) { flex: none; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--muted); font: 600 10px/1.3 var(--mono); text-transform: uppercase; }
+:where(.flag.down) { color: var(--down); border-color: color-mix(in srgb, var(--down) 40%, transparent); }
+
+/* ---- coins: the avatar (card.js avatar()), the quick-buy button, and the name / age / socials bits that coin rows
+   are built from. The coin card itself (.card.nc) is styled in css/pulse.css. ---- */
+.av { width: 52px; height: 52px; border-radius: 9px; background: var(--panel-2); border: 1px solid var(--line-2); overflow: hidden; display: grid; place-items: center; font: 600 15px/1 var(--mono); color: var(--muted); position: relative; }
+.av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.av .ring { position: absolute; inset: auto 0 0 0; height: 3px; background: var(--line-2); }
+.av .ring i { display: block; height: 100%; background: var(--accent); }
+.av.sm { width: 32px; height: 32px; border-radius: 7px; font-size: 11px; flex: none; }
+.qb { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font: 600 11.5px/1 var(--mono); white-space: nowrap; }
+.qb:hover { background: var(--accent); color: var(--accent-ink); }
+.card.fresh { animation: fresh 1.4s ease-out; }
+@keyframes fresh { from { background: color-mix(in srgb, var(--accent) 14%, transparent); } to { background: transparent; } }
+:where(.l1) { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+:where(.l2) { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11.5px; min-width: 0; white-space: nowrap; }
+:where(.sym) { font-weight: 700; font-size: 14px; letter-spacing: -.01em; white-space: nowrap; }
+:where(.nm) { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+:where(.copy) { flex: none; color: var(--dim); background: none; border: 0; padding: 0; line-height: 0; }
+:where(.copy):hover { color: var(--fg); }
+:where(.age) { color: var(--up); font-family: var(--mono); }
+:where(.soc) { display: inline-flex; gap: 6px; }
+:where(.soc) a { color: var(--dim); line-height: 0; }
+:where(.soc) a:hover { color: var(--fg); }
+
+/* ---- empty and loading states ----
+   .empty-state: <div class="empty-state"><span class="es-ic">ICON</span><h3>Title</h3><p>Body</p>
+     <ol class="es-steps"><li>…</li></ol><div class="es-acts"><button class="btn btn-accent">…</button></div></div>
+   .skel: a shimmering placeholder block (size it inline or with a page class); still under reduced motion.
+   :where(.empty) is the older one-liner (the router's error text uses it): <div class="empty"><b>Title</b><span>…</span></div> */
+.empty-state { display: grid; justify-items: center; gap: 10px; max-width: 470px; margin: 0 auto; padding: 48px 20px; text-align: center; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.empty-state .es-ic { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--muted); }
+.empty-state h3 { margin: 4px 0 0; color: var(--fg); font: 600 14px/1.3 var(--sans); }
+.empty-state p { margin: 0; }
+.empty-state .es-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+.empty-state .es-steps { display: grid; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; text-align: left; counter-reset: s; }
+.empty-state .es-steps li { display: flex; gap: 8px; }
+.empty-state .es-steps li::before { counter-increment: s; content: counter(s); flex: none; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line-2); font: 600 10px/1 var(--mono); }
+.empty-state a:not(.btn) { color: var(--accent); }
+.skel { display: block; border-radius: 6px; background: linear-gradient(90deg, var(--panel-2) 0 40%, color-mix(in srgb, var(--panel-2) 50%, var(--line-2)) 50%, var(--panel-2) 60% 100%); background-size: 250% 100%; animation: skel 1.3s linear infinite; }
+@keyframes skel { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+:where(.empty) { display: grid; gap: 8px; justify-items: center; max-width: 470px; margin: 0 auto; padding: 40px 18px; color: var(--muted); text-align: center; font-size: 12.5px; line-height: 1.55; }
+:where(.empty) > b { color: var(--fg); font: 600 14px/1.3 var(--sans); }
+:where(.pulse-dot) { display: inline-block; flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); animation: blink 1.2s infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+
+/* ---- touch screens: every small control gets a finger-sized hit area ---- */
+@media (pointer: coarse) { .seg button, .btn.sm, .qb { min-height: 32px; } }
+
+/* ---- dialogs and toasts ---- */
+dialog { padding: 0; border: 1px solid var(--line-2); border-radius: 12px; background: var(--panel); color: var(--fg); width: min(440px, calc(100vw - 32px)); }
+dialog::backdrop { background: var(--backdrop); backdrop-filter: blur(3px); }
+.dlg { display: grid; gap: 16px; padding: 20px; }
+.dlg h2 { margin: 0; font: 600 17px/1 var(--sans); }
+.dlg p { margin: 0; }
+.dlg h2[tabindex="-1"]:focus { outline: 0; } /* the picker focuses its title on open instead of the first wallet row */
+.dlg label { display: grid; gap: 8px; font-weight: 600; font-size: 12.5px; }
+.dlg .hint { color: var(--muted); font-weight: 400; font-size: 12px; }
+.dlg input { height: 36px; padding: 0 11px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--bg); font-family: var(--mono); font-size: 12px; outline: 0; }
+.dlg hr { border: 0; border-top: 1px solid var(--line); margin: 2px 0; width: 100%; }
+.dlg .check { display: flex; align-items: center; gap: 9px; font-weight: 500; }
+.dlg .check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.dlg-body { display: grid; gap: 16px; }
+.dlg-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dlg-link { color: var(--accent); font-size: 12px; font-weight: 500; }
+.pre-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); }
+.pre-tabs button { height: 30px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: 600 12.5px/1 var(--mono); }
+.pre-tabs button.on { background: var(--panel-2); color: var(--fg); }
+.wallet-list { display: grid; gap: 8px; }
+.wallet-list button { display: flex; align-items: center; gap: 11px; height: 48px; padding: 0 12px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--bg); font-weight: 600; text-align: left; white-space: nowrap; }
+.wallet-list button:hover { border-color: var(--accent-2); background: var(--panel-2); }
+.wallet-list small { margin-left: auto; min-width: 0; color: var(--muted); font-weight: 400; font-size: 11.5px; line-height: 1.3; text-align: right; white-space: normal; } /* the name keeps one line; a long hint wraps */
+/* src/ui/shell.js adds the initial tile and marks the Install / Detected labels */
+.wallet-list .wl-ic { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--fg); font: 700 11.5px/1 var(--sans); }
+.wallet-list .wl-ic.local { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: color-mix(in srgb, var(--warn) 9%, transparent); }
+.wallet-list small.wl-install { flex: none; white-space: nowrap; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--sel-line); background: var(--sel-bg); color: var(--sel-fg); font-weight: 600; }
+.wallet-list small.wl-ok { color: var(--up); font-weight: 600; }
+.toasts { position: fixed; right: 16px; bottom: 40px; display: grid; gap: 8px; z-index: 50; width: min(360px, calc(100vw - 32px)); }
+.toast { padding: 12px 14px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--panel-2); box-shadow: var(--shadow); font-size: 12.5px; display: grid; gap: 4px; animation: tin .2s ease-out; }
+.toast.ok { border-color: color-mix(in srgb, var(--up) 50%, transparent); }
+.toast.err { border-color: color-mix(in srgb, var(--down) 50%, transparent); }
+.toast a { color: var(--accent); }
+@keyframes tin { from { transform: translateY(8px); opacity: 0; } }

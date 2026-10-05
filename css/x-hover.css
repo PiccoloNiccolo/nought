@@ -1,0 +1,21 @@
+.xh-pop { position: fixed; z-index: 70; width: min(382px, calc(100vw - 20px)); max-height: calc(100dvh - 20px); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 1px solid var(--line-2); border-radius: 14px; background: var(--panel); box-shadow: 0 16px 54px #0009; }
+.xh-entry > header { display: flex; align-items: center; gap: 9px; padding: 12px 13px; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; background: var(--panel); }
+.xh-entry > header > svg { width: 16px; height: 16px; }
+.xh-entry > header b { font-size: 12px; font-weight: 600; }
+.xh-entry > header a { margin-left: auto; font-size: 11px; color: var(--accent); }
+.xh-close { border: 0; background: transparent; color: var(--muted); font-size: 20px; line-height: 18px; width: 22px; height: 22px; padding: 0; }
+.xh-loading { min-height: 70px; padding: 22px 17px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.xh-loading:not(.xh-unavailable)::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 9px; border: 2px solid var(--line-2); border-top-color: var(--accent); border-radius: 50%; animation: xh-spin 1s linear infinite; }
+.xh-frame { display: block; width: 100%; height: 300px; border: 0; background: transparent; }
+.xh-retry { display: block; margin-top: 10px; border: 1px solid var(--line-2); border-radius: 6px; padding: 5px 9px; background: var(--panel-2); color: var(--fg); font: 500 11px/1.4 var(--sans); }
+.xh-profile { display: flex; align-items: center; gap: 14px; padding: 19px 18px 10px; }
+.xh-avatar { display: grid; place-items: center; height: 46px; width: 46px; border: 1px solid var(--line-2); border-radius: 50%; background: var(--panel-2); }
+.xh-avatar svg { width: 22px; height: 22px; }
+.xh-profile h3 { margin: 0 0 3px; font-size: 16px; }
+.xh-profile p, .xh-profile span:not(.xh-avatar) { margin: 0; font-size: 11px; color: var(--muted); }
+.xh-note { margin: 0; padding: 10px 18px 20px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+a[data-x-preview]:hover, a[data-x-preview]:focus-visible { color: var(--fg); }
+@keyframes xh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .xh-loading::before { animation: none !important; } }
+.tweet-icon { color: #52b5f7; }
+a:hover .tweet-icon, a:focus-visible .tweet-icon { color: #8bd0ff; }

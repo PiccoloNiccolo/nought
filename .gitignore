@@ -1,0 +1,10 @@
+.DS_Store
+node_modules/
+.env*
+dist/
+*.log
+*.zip
+*.pem
+*.key
+coverage/
+.cache/

@@ -1,0 +1,143 @@
+{
+  "startup": [
+    {
+      "label": "before",
+      "ms": 4298
+    },
+    {
+      "label": "before",
+      "ms": 3145
+    },
+    {
+      "label": "before",
+      "ms": 3074
+    },
+    {
+      "label": "after",
+      "ms": 575
+    },
+    {
+      "label": "after",
+      "ms": 2534
+    },
+    {
+      "label": "after",
+      "ms": 362
+    }
+  ],
+  "routes": [
+    {
+      "hash": "#/discover",
+      "title": "Discover · Nought",
+      "text": "Trending\nSurge\nOrganic\nTop traded\nBoosted\nOverview\n5m\n1h\n6h\n24h\nFilters\nMajors\nU",
+      "overflow": false
+    },
+    {
+      "hash": "#/discover/surge",
+      "title": "Surge · Discover · Nought",
+      "text": "Trending\nSurge\nOrganic\nTop traded\nBoosted\nOverview\nFilters\nMajors\nRULES\nVol ×\nPr",
+      "overflow": false
+    },
+    {
+      "hash": "#/track",
+      "title": "Trackers · Nought",
+      "text": "Wallets\n0\nLive\nMonitor\nVision\nNot following any wallet\nFollow wallets you trust\n",
+      "overflow": false
+    },
+    {
+      "hash": "#/track/vision",
+      "title": "Vision · Nought",
+      "text": "Wallets\n0\nLive\nMonitor\nVision\nNot following any wallet\nCommunity list\nPublic wal",
+      "overflow": false
+    },
+    {
+      "hash": "#/perps/BTC",
+      "title": "BTC perp · Nought",
+      "text": "All\n1\nStarred\nExpand ⇔\nMARKET\tPRICE\t24H\n\nBTC\n80,000\t+1.27%\nBTC\n40X\n80,000\nMark\n8",
+      "overflow": false
+    },
+    {
+      "hash": "#/yield",
+      "title": "Yield · Nought",
+      "text": "Yield\n\nStake SOL by swapping it for a liquid staking token (LST). The LST keeps ",
+      "overflow": false
+    },
+    {
+      "hash": "#/portfolio",
+      "title": "Portfolio · Nought",
+      "text": "Spot\nActivity\nCalendar\nPerps\nActive wallet · none\nView\nLive PnL\nNo wallet picked",
+      "overflow": false
+    },
+    {
+      "hash": "#/portfolio/calendar",
+      "title": "Portfolio · Nought",
+      "text": "Spot\nActivity\nCalendar\nPerps\nActive wallet · none\nView\nLive PnL\nNo wallet picked",
+      "overflow": false
+    },
+    {
+      "hash": "#/portfolio/perps",
+      "title": "Portfolio · Nought",
+      "text": "Spot\nActivity\nCalendar\nPerps\nView\nLive PnL\nPaste an EVM address\n\nSee any Hyperli",
+      "overflow": false
+    },
+    {
+      "hash": "#/watch",
+      "title": "Watchlist · Nought",
+      "text": "Watchlist\nAdd\nNothing on your watchlist yet\n\nStar a coin anywhere in Nought, or ",
+      "overflow": false
+    },
+    {
+      "hash": "#/upkeep",
+      "title": "Upkeep · Nought",
+      "text": "#/upkeep\n\nNought charges 0%. This is how it keeps running.\n\nNo platform fee, no ",
+      "overflow": false
+    },
+    {
+      "hash": "#/settings",
+      "title": "Wallets · Settings · Nought",
+      "text": "Wallets\nPresets\nDisplay\nHotkeys\nAlerts\nNetwork\nData\nWallets\n\nConnect a browser w",
+      "overflow": false
+    },
+    {
+      "hash": "#/settings/display",
+      "title": "Display · Settings · Nought",
+      "text": "Wallets\nPresets\nDisplay\nHotkeys\nAlerts\nNetwork\nData\nDisplay\n\nThemes only change ",
+      "overflow": false
+    },
+    {
+      "hash": "#/settings/network",
+      "title": "Network · Settings · Nought",
+      "text": "Wallets\nPresets\nDisplay\nHotkeys\nAlerts\nNetwork\nData\nNetwork\n\nNought talks to pub",
+      "overflow": false
+    },
+    {
+      "hash": "#/settings/alerts",
+      "title": "Alerts · Settings · Nought",
+      "text": "Wallets\nPresets\nDisplay\nHotkeys\nAlerts\nNetwork\nData\nAlerts\n\nFills, order trigger",
+      "overflow": false
+    },
+    {
+      "hash": "#/t/111111111111111111111111111111AApump",
+      "title": "$F0 · Nought",
+      "text": "F0\nF0\nFixture coin 0\n1111…pump\n41s\nPUMP.FUN\nMARKET CAP\n$30.0K\nPRICE\n$0.0₄3\nLIQUI",
+      "overflow": false
+    },
+    {
+      "hash": "#/",
+      "title": "Nought · the zero-fee memecoin terminal",
+      "text": "OPEN SOURCE · MIT · SOLANA\n\nThe memecoin terminal that costs nothing to use.\n\nWa",
+      "overflow": false
+    }
+  ],
+  "interactions": [
+    "Unchanged cards retain DOM identity",
+    "Comma decimal quick-buy matches displayed amount",
+    "Pulse filter opens and dismisses",
+    "Mobile columns switch without horizontal overflow",
+    "Incremental trade rows preserve node identity and scroll"
+  ],
+  "errors": [],
+  "consoleErrors": [],
+  "beforeIdleMutations": 182,
+  "afterIdleMutations": 47
+}
