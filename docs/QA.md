@@ -2,6 +2,8 @@
 
 60 automated checks pass. New metadata coverage verifies a 20-token burst uses one shared lookup, equivalent IPFS gateway URLs coalesce, visible lookups race their backup immediately, in-flight background lookups promote without restarting, saved metadata resolves without another request after reload, stale URI responses are ignored, and unsafe cached URLs are rejected. The shared queues retain host limits, failure backoff and cancellation.
 
+Live browser verification on the rebuilt 0.8 preview: 21 of 24 visible images were loaded at the sample, four from saved thumbnails and two without source URLs. The browser reported no captured runtime errors or horizontal overflow. The footer linked to the public source repository. This live count is a changing-board observation, not a controlled latency comparison.
+
 The 20-to-1 result is a deterministic request-count comparison. It does not establish a 20× reduction in overall image latency or an advantage over another terminal. Source availability and network conditions still matter. Existing signed-transaction limitations below remain unchanged; no wallet or real trade is used by the tests.
 
 The public repository includes application code, build/preview tools, tests, license and documentation. A targeted scan found no embedded provider credentials or private machine paths in the publication files. Browser storage, local logs, chat history and the original local handoff notes are not part of the repository.
