@@ -1,7 +1,7 @@
 // Settings page: #/settings[/wallets|presets|display|hotkeys|alerts|network|data]. Everything is kept in this browser.
 //   wallets   the active wallet, local vault status, links into the wallet manager (src/ui/wallets.js)
 //   presets   P1–P3: buy amount, sell %, slippage, priority, MEV mode
-//   display   theme (Nought Dark, Grey, OLED black, Light), accent colour, watchlist strip, live PnL widget, compact rows
+//   display   theme (Nought Dark, Grey, OLED black, Light), accent colour, coin strip, live PnL widget, compact rows
 //   hotkeys   rebind the shell's keys (two-key sequences like "g p" work too)
 //   alerts    desktop notifications, sounds + master volume, price / market-cap alerts
 //   network   RPC choice with a live test; the Jupiter key slot (not wired: core sends no key yet)
@@ -22,6 +22,24 @@ import { HOTKEYS, hotkeys, setHotkey, resetHotkeys, comboOf, comboLabel, keyStat
 import { SOUNDS, prefs, setPrefs, playSound, enableDesktop, desktopState, listAlerts, addAlert, removeAlert, rearmAlert, alertQuote, alertLabel, fmtAlertValue } from '../ui/alerts.js';
 
 const TABS = [['wallets', 'Wallets'], ['presets', 'Presets'], ['display', 'Display'], ['hotkeys', 'Hotkeys'], ['alerts', 'Alerts'], ['network', 'Network'], ['data', 'Data']];
+// section icons for the sidebar (16 px line icons, drawn for Nought)
+const svg = (d) => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const TAB_IC = {
+  wallets: svg('<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M16 12.5h2M6.5 6V5.2A2.2 2.2 0 0 1 8.7 3h7.8"/>'),
+  presets: svg('<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>'),
+  display: svg('<rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M9 20h6M12 16.5V20"/>'),
+  hotkeys: svg('<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M8 14h8"/>'),
+  alerts: svg('<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15L6 16Zm4 4a2 2 0 0 0 4 0"/>'),
+  network: svg('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/>'),
+  data: svg('<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>'),
+};
+// what each theme looks like, for the picker's mini previews (mirrors the tokens in style.css)
+const THEME_SW = {
+  dark: { bg: '#06070b', panel: '#101114', line: '#22242d', fg: '#fcfcfc', muted: '#828598', acc: '#526fff' },
+  grey: { bg: '#131418', panel: '#1a1b20', line: '#2c2e37', fg: '#f2f3f6', muted: '#8c8fa2', acc: '#526fff' },
+  oled: { bg: '#000000', panel: '#060608', line: '#1a1b22', fg: '#fcfcfc', muted: '#828598', acc: '#526fff' },
+  light: { bg: '#f4f5f8', panel: '#ffffff', line: '#e3e5eb', fg: '#12141a', muted: '#5b6173', acc: '#3d5af1' },
+};
 const wui = () => import('../ui/wallets.js');
 const fail = (e) => toast(esc(e?.message || 'Something went wrong.'), 'err');
 const labelOf = (m) => { const s = tokens.get(m)?.symbol; return s ? (s.startsWith('$') ? s : '$' + s) : short(m); };
@@ -43,7 +61,8 @@ register({
   mount(view, [sub]) {
     const tab = TABS.some(([k]) => k === sub) ? sub : 'wallets';
     view.innerHTML = `<div class="setp"><div class="setp-in">
-      <nav class="setp-nav subtabs hfade" aria-label="Settings sections">${TABS.map(([k, l]) => `<a href="#/settings/${k}"${k === tab ? ' aria-current="page" class="on"' : ''}>${l}</a>`).join('')}</nav>
+      <aside class="setp-side"><p class="setp-side-h" aria-hidden="true">Settings</p>
+      <nav class="setp-nav subtabs hfade" aria-label="Settings sections">${TABS.map(([k, l]) => `<a href="#/settings/${k}"${k === tab ? ' aria-current="page" class="on"' : ''}>${TAB_IC[k] || ''}<span>${l}</span></a>`).join('')}</nav></aside>
       <section class="setp-body" id="setp-body" aria-labelledby="setp-h"></section>
     </div></div>`;
     const ctx = { offs: [], timers: [], alive: true, body: $('#setp-body', view) };
@@ -60,7 +79,7 @@ register({
 });
 
 // the accent the current theme uses (for the colour picker's starting value)
-const themeAccent = () => { const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(); return /^#[0-9a-f]{6}$/i.test(v) ? v : '#38d6f5'; };
+const themeAccent = () => { const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(); return /^#[0-9a-f]{6}$/i.test(v) ? v : '#526fff'; };
 const head = (title, lede) => `<h1 id="setp-h">${title}</h1>${lede ? `<p class="setp-lede">${lede}</p>` : ''}`;
 
 const PANES = {
@@ -133,7 +152,7 @@ const PANES = {
       return `<div class="setp-card setp-preset${act ? ' on' : ''}" data-card="${i}">
         <div class="setp-phead"><label class="setp-pname"><span class="sr-only">Name of preset ${i + 1}</span><input data-i="${i}" data-in="name" data-fk="p${i}-name" maxlength="6" value="${esc(p.name)}" spellcheck="false" autocomplete="off"></label>
           <button type="button" class="btn sm ${act ? 'btn-accent' : ''}" data-i="${i}" data-k="active" data-v="1" data-fk="p${i}-active" aria-pressed="${act}">${act ? 'Active' : 'Use this one'}</button></div>
-        <label class="setp-field"><span>Buy amount <em>SOL per quick buy</em></span><input data-i="${i}" data-in="buy" data-fk="p${i}-buy" inputmode="decimal" autocomplete="off" spellcheck="false" value="${esc(String(p.buy))}" aria-describedby="p${i}-buy-msg"><span class="setp-fmsg" id="p${i}-buy-msg" role="status"></span></label>
+        <label class="setp-field"><span>Buy amount <em>SOL per quick buy</em></span><input class="input" data-i="${i}" data-in="buy" data-fk="p${i}-buy" inputmode="decimal" autocomplete="off" spellcheck="false" value="${esc(String(p.buy))}" aria-describedby="p${i}-buy-msg"><span class="setp-fmsg" id="p${i}-buy-msg" role="status"></span></label>
         <div class="seg-fill c5">${segBtns(QUICK.map((v) => [v, String(v)]), p.buy, a('buy'), 'Quick amounts')}</div>
         <div class="setp-field"><span>Sell <em>% of the holding</em></span><div class="seg-fill c5">${segBtns(SELL.map((v) => [v, v + '%']), p.sellPct, a('sellPct'), 'Sell share')}</div></div>
         <div class="setp-field"><span>Slippage <em>standard route only</em></span><div class="seg-fill c7">${segBtns(SLIP.map((v) => [v, v + '%']), p.slippage, a('slippage'), 'Slippage')}</div></div>
@@ -179,19 +198,19 @@ const PANES = {
       const t = theme(), acc = t.accent;
       ctx.body.innerHTML = head('Display', 'Themes only change colours, so every page follows them. Saved in this browser.')
         + `<div class="setp-card"><h2 id="th-h">Theme</h2>
-          <div class="setp-themes" role="radiogroup" aria-labelledby="th-h">${THEMES.map((x) => `<label class="setp-theme${t.name === x.id ? ' on' : ''}"><input type="radio" name="theme" value="${x.id}" data-fk="th-${x.id}" ${t.name === x.id ? 'checked' : ''}><span class="sw" aria-hidden="true">${x.sw.map((c) => `<i style="background:${c}"></i>`).join('')}</span><b>${x.name}</b></label>`).join('')}</div></div>
+          <div class="setp-themes" role="radiogroup" aria-labelledby="th-h">${THEMES.map((x) => { const w = THEME_SW[x.id] || THEME_SW.dark, a = acc ? shownAccent(acc, x.id) : w.acc; return `<label class="setp-theme${t.name === x.id ? ' on' : ''}"><input type="radio" name="theme" value="${esc(x.id)}" data-fk="th-${esc(x.id)}" ${t.name === x.id ? 'checked' : ''}><span class="sw" aria-hidden="true" style="--sb:${esc(w.bg)};--sp:${esc(w.panel)};--sl:${esc(w.line)};--sf:${esc(w.fg)};--sm:${esc(w.muted)};--sa:${esc(a)}"><i></i><i></i><i></i></span><b>${esc(x.name)}</b></label>`; }).join('')}</div></div>
         <div class="setp-card"><h2 id="ac-h">Accent colour</h2>
           <div class="setp-accents" role="radiogroup" aria-labelledby="ac-h">
-            <label class="setp-acc${!acc ? ' on' : ''}" title="Theme default"><input type="radio" name="accent" value="" data-fk="ac-def" ${!acc ? 'checked' : ''}><i class="def" aria-hidden="true"></i><span class="sr-only">Theme default</span></label>
-            ${ACCENTS.map((c) => { const sc = shownAccent(c, t.name); return `<label class="setp-acc${acc === c ? ' on' : ''}" title="${c}${sc !== c ? ` (shown as ${sc} on Light)` : ''}"><input type="radio" name="accent" value="${c}" data-fk="ac-${c}" ${acc === c ? 'checked' : ''}><i style="background:${sc}" aria-hidden="true"></i><span class="sr-only">${c}</span></label>`; }).join('')}
-            <label class="setp-custom">Custom <input type="color" data-fk="ac-custom" data-accent-custom value="${acc || themeAccent()}"></label>
+            <label class="setp-acc def${!acc ? ' on' : ''}" title="The theme's own accent"><input type="radio" name="accent" value="" data-fk="ac-def" ${!acc ? 'checked' : ''}><i style="background:${esc((THEME_SW[t.name] || THEME_SW.dark).acc)}" aria-hidden="true"></i><span>Default</span></label>
+            ${ACCENTS.map((c) => { const sc = shownAccent(c, t.name); return `<label class="setp-acc${acc === c ? ' on' : ''}" title="${esc(c)}${sc !== c ? ` (shown as ${esc(sc)} on Light)` : ''}"><input type="radio" name="accent" value="${esc(c)}" data-fk="ac-${esc(c)}" ${acc === c ? 'checked' : ''}><i style="background:${esc(sc)}" aria-hidden="true"></i><span class="sr-only">${esc(c)}</span></label>`; }).join('')}
+            <label class="setp-custom"><span>Custom</span><input type="color" data-fk="ac-custom" data-accent-custom value="${esc(acc || themeAccent())}"></label>
           </div>
           ${t.name === 'light' && acc && shownAccent(acc, 'light') !== acc ? `<p class="setp-mini">On Light, ${esc(acc)} is darkened to ${esc(shownAccent(acc, 'light'))} so links and tabs stay readable on white.</p>` : ''}
-          <div class="setp-preview" aria-hidden="true"><span class="btn btn-accent sm">Buy</span><span class="setp-pv-seg seg sm"><button type="button" tabindex="-1" class="on">1h</button><button type="button" tabindex="-1">24h</button></span><span class="qb">${ICON.bolt}0.1</span><span class="up mono">+12.4%</span><span class="down mono">-3.1%</span><a class="dlg-link">A link</a></div></div>
+          <div class="setp-preview" aria-hidden="true"><span class="setp-pv-l">Preview</span><span class="btn btn-accent sm">Connect</span><span class="setp-pv-seg seg sm"><button type="button" tabindex="-1" class="on">1h</button><button type="button" tabindex="-1">24h</button></span><span class="qb">${ICON.bolt}0.1 SOL</span><span class="up mono">+12.4%</span><span class="down mono">-3.1%</span><a class="dlg-link">A link</a></div></div>
         <div class="setp-card"><h2>Layout</h2>
-          <label class="setp-check"><input type="checkbox" data-fk="d-ticker" data-d="ticker" ${tickerHidden() ? '' : 'checked'}><span>Show the watchlist strip under the top bar<span class="setp-mini">${cap(keyOf('ticker'))}the star in the top bar. It only takes space once you star a coin.</span></span></label>
-          <label class="setp-check"><input type="checkbox" data-fk="d-pnl" data-d="pnl" ${pnlShown() ? 'checked' : ''}><span>Show the live PnL widget<span class="setp-mini">${cap(keyOf('pnl'))}the chart button in the top bar. A small box with the active wallet's change this session.</span></span></label>
-          <label class="setp-check"><input type="checkbox" data-fk="d-compact" data-d="compact" ${settings.compact ? 'checked' : ''}><span>Compact rows on Pulse</span></label></div>`;
+          <label class="setp-toggle"><span>Show the coin strip under the top bar<span class="setp-mini">${cap(keyOf('ticker'))}the star in the top bar. It shows your watchlist, recently viewed or trending coins, and is hidden on phones.</span></span><input type="checkbox" class="switch" data-fk="d-ticker" data-d="ticker" ${tickerHidden() ? '' : 'checked'}></label>
+          <label class="setp-toggle"><span>Show the live PnL widget<span class="setp-mini">${cap(keyOf('pnl'))}the chart button in the top bar. A small box with the active wallet's change this session.</span></span><input type="checkbox" class="switch" data-fk="d-pnl" data-d="pnl" ${pnlShown() ? 'checked' : ''}></label>
+          <label class="setp-toggle"><span>Compact rows on Scope</span><input type="checkbox" class="switch" data-fk="d-compact" data-d="compact" ${settings.compact ? 'checked' : ''}></label></div>`;
     });
     ctx.body.addEventListener('change', (e) => {
       const t = e.target;
@@ -223,7 +242,7 @@ const PANES = {
           </tbody></table></div>
           <p class="setp-msg" role="status" aria-live="polite">${esc(msg)}</p>
           <div class="setp-acts"><button type="button" class="btn btn-ghost" data-hk-all data-fk="hk-all">Reset all to defaults</button></div></div>
-        <div class="setp-card"><h2>Page keys</h2><p class="setp-note">Pages add their own keys while they are open (for example on Pulse and the token page). Those are listed on each page and are not changed here.</p></div>`;
+        <div class="setp-card"><h2>Page keys</h2><p class="setp-note">Pages add their own keys while they are open (for example on Scope and the token page). Those are listed on each page and are not changed here.</p></div>`;
     });
     const stop = () => { if (!cap) return; clearTimeout(cap.timer); window.removeEventListener('keydown', onCap, true); keyState.capturing = false; cap = null; };
     const finish = (combo) => {
@@ -266,18 +285,18 @@ const PANES = {
         + `<div class="setp-card"><h2>Desktop notifications</h2>
             <p class="setp-note">Shown only while Nought is in a background tab. ${ds === 'unsupported' ? (globalThis.isSecureContext ? 'This browser does not support them.' : 'They need Nought to be opened over https.') : ds === 'denied' ? 'This site is blocked in your browser settings; allow notifications there first.' : ''}</p>
             <div class="setp-acts">${ds === 'unsupported' || ds === 'denied' ? '' : p.desktop && ds === 'granted' ? '<span class="setp-tag up">On</span><button type="button" class="btn btn-ghost sm" data-a="desk-off" data-fk="a-desk">Turn off</button>' : '<button type="button" class="btn" data-a="desk-on" data-fk="a-desk">Allow desktop notifications</button>'}</div>
-            <label class="setp-check"><input type="checkbox" data-a="pos" data-fk="a-pos" ${p.positionToasts ? 'checked' : ''}> After a fill, show the updated position with quick Sell buttons</label></div>
+            <label class="setp-toggle"><span>After a fill, show the updated position with quick Sell buttons</span><input type="checkbox" class="switch" data-a="pos" data-fk="a-pos" ${p.positionToasts ? 'checked' : ''}></label></div>
           <div class="setp-card"><h2>Sounds</h2>
-            <label class="setp-range"><span>Master volume</span><input type="range" min="0" max="100" step="5" value="${Math.round(p.volume * 100)}" data-a="vol" data-fk="a-vol" aria-valuetext="${Math.round(p.volume * 100)}%"><b class="mono">${Math.round(p.volume * 100)}%</b></label>
-            <div class="setp-sounds">${Object.entries(SOUNDS).map(([k, l]) => `<div class="setp-sound"><label class="setp-check"><input type="checkbox" data-snd="${k}" data-fk="snd-${k}" ${p.sounds[k] ? 'checked' : ''}> ${esc(l)}</label><button type="button" class="btn btn-ghost sm" data-test="${k}" data-fk="sndt-${k}" aria-label="Play the ${esc(l.toLowerCase())} sound">Test</button></div>`).join('')}</div>
+            <label class="setp-range"><span>Master volume</span><input type="range" class="range" min="0" max="100" step="5" value="${Math.round(p.volume * 100)}" style="--v:${Math.round(p.volume * 100)}%" data-a="vol" data-fk="a-vol" aria-valuetext="${Math.round(p.volume * 100)}%"><b class="mono">${Math.round(p.volume * 100)}%</b></label>
+            <div class="setp-sounds">${Object.entries(SOUNDS).map(([k, l]) => `<div class="setp-sound"><label class="setp-check"><input type="checkbox" class="switch" data-snd="${k}" data-fk="snd-${k}" ${p.sounds[k] ? 'checked' : ''}><span>${esc(l)}</span></label><button type="button" class="btn btn-ghost sm" data-test="${k}" data-fk="sndt-${k}" aria-label="Play the ${esc(l.toLowerCase())} sound">Test</button></div>`).join('')}</div>
             <p class="setp-note">Sounds start after your first click or key press on the page (browsers require it).</p></div>
           <div class="setp-card"><h2>Price and market-cap alerts</h2>
             <form class="setp-alert-form" data-a="form" novalidate>
-              <label class="setp-field grow"><span>Token address</span><input name="mint" data-fk="af-mint" placeholder="Paste a token address" spellcheck="false" autocomplete="off" value="${esc(form.mint)}"></label>
+              <label class="setp-field grow"><span>Token address</span><input class="input lg" name="mint" data-fk="af-mint" placeholder="Paste a token address" spellcheck="false" autocomplete="off" value="${esc(form.mint)}"></label>
               <div class="setp-field"><span>Watch</span>${segBtns([['price', 'Price'], ['mc', 'Market cap']], form.kind, (v) => `data-af="kind" data-v="${v}" data-fk="af-k-${v}"`, 'Watch')}</div>
               <div class="setp-field"><span>When it goes</span>${segBtns([['above', 'Above'], ['below', 'Below']], form.op, (v) => `data-af="op" data-v="${v}" data-fk="af-o-${v}"`, 'Condition')}</div>
-              <label class="setp-field"><span>${form.kind === 'mc' ? 'Market cap (USD)' : 'Price (USD)'}</span><input name="value" data-fk="af-val" inputmode="${form.kind === 'mc' ? 'text' : 'decimal'}" autocomplete="off" spellcheck="false" placeholder="${form.kind === 'mc' ? '1.5m' : '0.0012'}" value="${esc(form.value)}"></label>
-              <button type="submit" class="btn btn-accent" data-fk="af-add">Add alert</button>
+              <label class="setp-field"><span>${form.kind === 'mc' ? 'Market cap (USD)' : 'Price (USD)'}</span><input class="input lg" name="value" data-fk="af-val" inputmode="${form.kind === 'mc' ? 'text' : 'decimal'}" autocomplete="off" spellcheck="false" placeholder="${form.kind === 'mc' ? '1.5m' : '0.0012'}" value="${esc(form.value)}"></label>
+              <button type="submit" class="btn btn-accent lg" data-fk="af-add">Add alert</button>
             </form>
             ${form.err ? `<p class="setp-err" role="alert">${esc(form.err)}</p>` : ''}
             ${list.length ? `<div class="setp-scroll"><table class="setp-table"><thead><tr><th scope="col">Token</th><th scope="col">Alert when</th><th scope="col">Now</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>
@@ -313,7 +332,7 @@ const PANES = {
       else if (t.dataset.snd) setPrefs({ sounds: { [t.dataset.snd]: t.checked } });
       else if (t.dataset.a === 'vol') { setPrefs({ volume: Number(t.value) / 100 }); playSound('fills', { force: true }); }
     });
-    ctx.body.addEventListener('input', (e) => { const t = e.target; if (t.dataset.a === 'vol') { t.nextElementSibling.textContent = t.value + '%'; t.setAttribute('aria-valuetext', t.value + '%'); } });
+    ctx.body.addEventListener('input', (e) => { const t = e.target; if (t.dataset.a === 'vol') { t.nextElementSibling.textContent = t.value + '%'; t.setAttribute('aria-valuetext', t.value + '%'); t.style.setProperty('--v', t.value + '%'); } });
     const redraw = () => { if (!ctx.body.contains(document.activeElement) || !document.activeElement.matches('input:not([type="checkbox"]):not([type="range"])')) { syncForm(); draw(); } };
     ctx.offs.push(on('alerts-list', redraw));
     ctx.offs.push(on('alerts-quotes', redraw));
@@ -325,12 +344,12 @@ const PANES = {
     const results = new Map(); // url → {ok, ms, error} | 'busy'
     const NAMES = { 'solana-rpc.publicnode.com': 'PublicNode', 'rpc.solanatracker.io': 'Solana Tracker', 'public.rpc.solanavibestation.com': 'Solana Vibe Station' };
     const host = (u) => { try { return new URL(u).host; } catch { return u; } };
-    let custom = settings.rpc && !RPCS.includes(settings.rpc) ? settings.rpc : '', err = '';
+    let custom = settings.rpc && !RPCS.includes(settings.rpc) ? settings.rpc : '', err = '', relayErr = '';
     // green under 400 ms, amber under 1.2 s, red from there
     const res = (u) => { const r = results.get(u); return r === 'busy' ? '<span class="dim">Testing…</span>' : !r ? '' : r.ok ? `<span class="${r.ms < 400 ? 'up' : r.ms < 1200 ? 'warn' : 'down'}">${r.ms} ms</span>` : `<span class="down">${esc(r.error)}</span>`; };
     const row = (val, title, sub, fk) => `<label class="setp-rpc${settings.rpc === val ? ' on' : ''}"><input type="radio" name="rpc" value="${esc(val)}" data-fk="${fk}" ${settings.rpc === val ? 'checked' : ''}><span class="t"><b>${title}</b><span class="mono dim">${esc(sub)}</span></span><span class="res mono" aria-live="polite">${val ? res(val) : ''}</span>${val ? `<button type="button" class="btn btn-ghost sm" data-test="${esc(val)}" data-fk="${fk}-t">Test</button>` : ''}</label>`;
     const draw = () => keepFocus(() => {
-      ctx.body.innerHTML = head('Network', 'Nought talks to public, keyless services straight from your browser. There is no Nought server in between.')
+      ctx.body.innerHTML = head('Network', 'Nought talks to public, keyless services straight from your browser. The one Nought server is the metadata relay below, which only reads coin pictures and names.')
         + `<div class="setp-card"><h2 id="rpc-h">Solana RPC</h2>
           <p class="setp-note">The RPC reads balances and sends transactions signed by local wallets. Extension wallets send through their own RPC. If the chosen one fails, Nought falls back to the public ones.</p>
           <div class="setp-rpcs" role="radiogroup" aria-labelledby="rpc-h">
@@ -338,19 +357,34 @@ const PANES = {
             ${RPCS.map((u, i) => row(u, NAMES[host(u)] || host(u), u, 'rpc-' + i)).join('')}
             ${custom ? row(custom, 'Custom', custom, 'rpc-custom') : ''}
           </div>
-          <form class="setp-inline" data-n="custom" novalidate><label class="setp-field grow"><span>Custom RPC URL <em>https only, e.g. your own provider key. Stored only in this browser.</em></span><input name="url" data-fk="rpc-url" placeholder="https://…" spellcheck="false" autocomplete="off" value="${esc(custom)}"></label><button type="submit" class="btn" data-fk="rpc-use">Test and use</button></form>
+          <form class="setp-inline" data-n="custom" novalidate><label class="setp-field grow"><span>Custom RPC URL <em>https only, e.g. your own provider key. Stored only in this browser.</em></span><input class="input lg" name="url" data-fk="rpc-url" placeholder="https://…" spellcheck="false" autocomplete="off" value="${esc(custom)}"></label><button type="submit" class="btn lg" data-fk="rpc-use">Test and use</button></form>
           ${err ? `<p class="setp-err" role="alert">${esc(err)}</p>` : ''}</div>
+        <div class="setp-card"><h2>Metadata relay</h2>
+          <p class="setp-note">On by default. Some launch tools host coin details on servers that refuse browsers, so without a relay those pictures wait 1–2 s for pump.fun's image CDN. Nought's relay (<span class="mono">tools/meta-relay.mjs</span>, open source, no keys) reads every launch as it happens and only returns a coin's picture link, name and social links. Leave the address empty to turn it off, or run your own.</p>
+          <form class="setp-inline" data-n="relay" novalidate><label class="setp-field grow"><span>Relay address <em>https, or http://127.0.0.1 for one on this computer. Empty turns it off. Default: Nought's relay.</em></span><input class="input lg" name="url" data-fk="relay-url" placeholder="https://…" spellcheck="false" autocomplete="off" value="${esc(settings.metaRelay)}"></label><button type="submit" class="btn lg" data-fk="relay-use">${settings.metaRelay ? 'Save' : 'Test and use'}</button></form>
+          ${relayErr ? `<p class="setp-err" role="alert">${esc(relayErr)}</p>` : ''}</div>
         <div class="setp-card"><h2>Jupiter API key</h2>
-          <label class="setp-field"><span>Your own key <em>optional</em></span><input disabled placeholder="Coming later" aria-describedby="jk-note"></label>
+          <label class="setp-field"><span>Your own key <em>optional</em></span><input class="input lg" disabled placeholder="Coming later" aria-describedby="jk-note"></label>
           <p class="setp-note" id="jk-note">Not available yet: Nought's data layer doesn't send a Jupiter key today, so this slot is off. When it is wired, a key you enter will stay in this browser and go only to api.jup.ag, never to Nought.</p></div>
         <div class="setp-card"><h2>Data sources</h2>
-          <ul class="setp-list plain"><li><b>Jupiter</b><span class="dim">tokens, prices, Pulse lists, trades, holders, charts, quotes and swaps</span></li><li><b>Dexscreener</b><span class="dim">pairs, search fallback, boosts</span></li><li><b>PumpPortal</b><span class="dim">live launch and migration stream</span></li><li><b>Hyperliquid</b><span class="dim">perps and BTC / ETH prices</span></li><li><b>GeckoTerminal</b><span class="dim">slow fallback for the Pulse board</span></li></ul></div>`;
+          <ul class="setp-list plain"><li><b>Jupiter</b><span class="dim">tokens, prices, Scope lists, trades, holders, charts, quotes and swaps</span></li><li><b>Dexscreener</b><span class="dim">pairs, search fallback, boosts</span></li><li><b>PumpPortal</b><span class="dim">live launch and migration stream</span></li><li><b>Hyperliquid</b><span class="dim">perps and BTC / ETH prices</span></li><li><b>GeckoTerminal</b><span class="dim">slow fallback for the Scope board</span></li></ul></div>`;
     });
+    // A relay answers /meta without a url with a JSON error: proof it is one, without fetching any coin.
+    const useRelay = async (v) => {
+      if (!v) { set({ metaRelay: '' }); relayErr = ''; toast('Metadata relay off.', 'ok'); draw(); return; }
+      let origin = ''; try { const u = new URL(v); if (u.protocol === 'https:' || (u.protocol === 'http:' && /^(127\.0\.0\.1|localhost)$/.test(u.hostname))) origin = u.origin; } catch { /* below */ }
+      if (!origin) { relayErr = 'Enter an https:// address, or http://127.0.0.1:port for a relay on this computer.'; draw(); return; }
+      let ok = false; try { const r = await fetch(origin + '/meta?url=', { credentials: 'omit', signal: AbortSignal.timeout(5000) }); ok = r.status === 400 && typeof (await r.json())?.error === 'string'; } catch { ok = false; }
+      if (!ctx.alive) return;
+      if (!ok) { relayErr = 'No metadata relay answered at that address.'; draw(); return; }
+      set({ metaRelay: origin }); relayErr = ''; toast('Using the metadata relay.', 'ok'); draw();
+    };
     const test = async (u) => { results.set(u, 'busy'); draw(); const r = await probeRpc(u); if (!ctx.alive) return r; results.set(u, r); draw(); return r; };
     ctx.body.addEventListener('change', (e) => { if (e.target.name === 'rpc') { set({ rpc: e.target.value }); err = ''; draw(); if (e.target.value) test(e.target.value); } });
     ctx.body.addEventListener('click', (e) => { const b = e.target.closest('[data-test]'); if (b) { e.preventDefault(); test(b.dataset.test); } });
     ctx.body.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (e.target.dataset.n === 'relay') { await useRelay(String(e.target.elements.url.value || '').trim()); return; }
       const v = String(e.target.elements.url.value || '').trim();
       let u; try { u = new URL(v); } catch { u = null; }
       if (!u || u.protocol !== 'https:' || /api\.mainnet(-beta)?\.solana\.com$/i.test(u.host)) { err = !u || u.protocol !== 'https:' ? 'Enter a full https:// address.' : 'Solana\'s own public RPC refuses browser requests. Pick another.'; draw(); $('[data-fk="rpc-url"]')?.focus(); return; }
@@ -373,7 +407,7 @@ const PANES = {
       const pi = pendingImport;
       ctx.body.innerHTML = head('Your data', 'Everything Nought keeps lives in this browser: settings, presets, hotkeys, theme, watchlist, alerts, the trade journal and orders armed here. Local wallet keys are stored separately, encrypted.')
         + `<div class="setp-card"><h2>Export</h2>
-            <p class="setp-note">Downloads your settings (presets, hotkeys, theme, watchlist, alerts, tracked wallets, Pulse setup) as a JSON file you can import here or in another browser. Wallets, wallet keys, copy-trading rules, the trade journal, notifications and a custom RPC address (it can hold a provider key) are never in it.</p>
+            <p class="setp-note">Downloads your settings (presets, hotkeys, theme, watchlist, alerts, tracked wallets, Scope setup) as a JSON file you can import here or in another browser. Wallets, wallet keys, copy-trading rules, the trade journal, notifications and a custom RPC address (it can hold a provider key) are never in it.</p>
             <div class="setp-acts"><button type="button" class="btn" data-d="export" data-fk="d-export">Download settings (.json)</button></div></div>
           <div class="setp-card"><h2>Import</h2>
             <label class="setp-field"><span>Settings file <em>a .json exported from Nought</em></span><input type="file" accept="application/json,.json" data-d="file" data-fk="d-file"></label>
@@ -394,7 +428,7 @@ const PANES = {
           <div class="setp-card danger"><h2>Wipe local data</h2>
             <p class="setp-note">Removes every Nought setting, the watchlist, alerts, notifications, recent searches, the trade journal${armedCount ? ` and <b>${armedCount} armed order${armedCount === 1 ? '' : 's'}</b>` : ' and armed orders'} from this browser. Your local wallets are kept unless you tick the box below.</p>
             <form class="setp-wipe" data-d="wipe" novalidate>
-              <label class="setp-field"><span>Type WIPE to confirm</span><input name="word" data-fk="d-word" autocomplete="off" spellcheck="false"></label>
+              <label class="setp-field"><span>Type WIPE to confirm</span><input class="input lg" name="word" data-fk="d-word" autocomplete="off" spellcheck="false"></label>
               <label class="setp-check"><input type="checkbox" name="vault" data-fk="d-vault"> Also erase my local wallets (asks again before deleting any key)</label>
               <div class="setp-acts"><button type="submit" class="btn danger" data-fk="d-wipe">Wipe this browser</button></div>
             </form></div>`;
@@ -506,6 +540,7 @@ const IMPORT = {
     return { name: THEMES.some((x) => x.id === v.name) ? v.name : 'dark', accent: /^#[0-9a-f]{6}$/i.test(v.accent || '') ? v.accent.toLowerCase() : '' };
   },
   'ticker.hidden': (v, why) => (typeof v === 'boolean' ? v : void why.push('ticker.hidden')),
+  'ticker.src': (v, why) => (['watch', 'recent', 'trend'].includes(v) ? v : void why.push('ticker.src')),
   watch: (v, why) => (Array.isArray(v) ? [...new Set(v.filter(isMint))].slice(0, 500) : void why.push('watch')),
   alerts(v, why) {
     if (!Array.isArray(v)) { why.push('alerts'); return; }
@@ -606,7 +641,7 @@ function tradingChanges(data) {
     add(`${n} slippage (%)`, o.slippage, p.slippage); add(`${n} priority`, PRIO[o.prio]?.label || o.prio, PRIO[p.prio]?.label); add(`${n} MEV protection`, o.mev || 'off', p.mev);
   });
   if (s?.rpc !== undefined) add('RPC', settings.rpc || 'Automatic', s.rpc || 'Automatic');
-  if (data['pulse.qb']) { const cur = LS.get('pulse.qb', {}), c0 = isObj(cur) ? cur : {}; for (const c of COLS) add(`Pulse ${c === 'new' ? 'New pairs' : c === 'stretch' ? 'Final stretch' : 'Migrated'} quick buy (SOL)`, c0[c] ?? 'preset', data['pulse.qb'][c] ?? 'preset'); }
+  if (data['pulse.qb']) { const cur = LS.get('pulse.qb', {}), c0 = isObj(cur) ? cur : {}; for (const c of COLS) add(`Scope ${c === 'new' ? 'New pairs' : c === 'stretch' ? 'Final stretch' : 'Migrated'} quick buy (SOL)`, c0[c] ?? 'preset', data['pulse.qb'][c] ?? 'preset'); }
   for (const [k, label] of [['instant.chips', 'Instant trade'], ['tp.chips', 'Token page']]) {
     const d = data[k]; if (!d) continue;
     const cur = LS.get(k, null), c0 = isObj(cur) ? cur : {};

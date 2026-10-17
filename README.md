@@ -6,14 +6,14 @@ An original, open-source Solana memecoin terminal with **0% Nought platform fees
 
 Node.js 22 or later. No package installation is required for the app, build, or unit tests.
 
-For a preview that keeps running after its launching terminal or chat session ends:
+For a preview that keeps running after the terminal that launched it closes:
 
 ```sh
 npm run build
 npm run preview
 ```
 
-Open http://127.0.0.1:3302/#/pulse. Re-running the command reuses this build if already running. Run it again after restarting your Mac. It does not install a login item or publish the site.
+Open http://127.0.0.1:3302/#/pulse. Re-running the command reuses this build if already running. Run it again after restarting your computer. It does not install a login item or publish the site.
 
 For a foreground development server that stops when its terminal closes:
 
@@ -48,7 +48,7 @@ In a deterministic launch-burst check, 20 coins sharing a document required **on
 
 See [changes by version](CHANGELOG.md), [contributing](CONTRIBUTING.md), and [security reporting](SECURITY.md).
 
-See [assessment and measured results](docs/ASSESSMENT.md), [QA](docs/QA.md), and [build contract](docs/BUILD.md).
+See the [build contract](docs/BUILD.md) and the [feature matrix](docs/feature-matrix.md).
 
 ## Limits
 

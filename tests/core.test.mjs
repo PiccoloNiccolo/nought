@@ -123,3 +123,10 @@ test('Pulse polling slows off-page and pauses entirely while hidden', async () =
 test('equal-time trades preserve provider order instead of sorting opaque IDs', async()=>{
  const cursor=new TradeCursor();const r=await cursor.poll(pageSource([{id:'10',at:100},{id:'9',at:100}]));assert.deepEqual(r.txs.map(x=>x.id),['9','10']);
 });
+
+test('displayed text drops direction controls that could make one coin name look like another', async () => {
+  const { api } = await moduleAt('src/core/util.js');
+  assert.equal(api.esc('\u202EROHT'), 'ROHT');
+  assert.equal(api.esc('a\u2066b\u2069c\u200Fd'), 'abcd');
+  assert.equal(api.esc('<b>"x"</b>'), '&lt;b&gt;&quot;x&quot;&lt;/b&gt;', 'HTML escaping is unchanged');
+});

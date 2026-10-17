@@ -17,5 +17,8 @@
 a[data-x-preview]:hover, a[data-x-preview]:focus-visible { color: var(--fg); }
 @keyframes xh-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .xh-loading::before { animation: none !important; } }
-.tweet-icon { color: #52b5f7; }
-a:hover .tweet-icon, a:focus-visible .tweet-icon { color: #8bd0ff; }
+/* a tweet (quill) and an X account or community (person): both blue; the grey person elsewhere on a card is holders */
+.tweet-icon { color: #5b9dff; }
+a:hover .tweet-icon, a:focus-visible .tweet-icon { color: #93bfff; }
+.xacct-icon { color: #5b9dff; }
+a:hover .xacct-icon, a:focus-visible .xacct-icon { color: #93bfff; }

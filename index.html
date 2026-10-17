@@ -7,8 +7,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Nought · zero-fee memecoin terminal</title>
 <meta name="description" content="An open-source memecoin terminal for Solana. Live pump.fun pairs, charts and one-click trades with 0% platform fees.">
-<meta name="theme-color" content="#07080b">
+<meta name="theme-color" content="#06070b">
 <!-- where the status bar's "Source" link points; empty = the README served with this site -->
+<meta name="nought:x" content="https://x.com/Nought0Fees">
 <meta name="nought:repo" content="https://github.com/PiccoloNiccolo/nought">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://pump.mypinata.cloud" crossorigin>
@@ -21,45 +22,43 @@
 <link rel="stylesheet" href="style.css"><link rel="stylesheet" href="css/x-hover.css">
 <link rel="stylesheet" href="css/landing.css"><link rel="stylesheet" href="css/pulse.css"><link rel="stylesheet" href="css/token.css"><link rel="stylesheet" href="css/token-tabs.css">
 <link rel="stylesheet" href="css/discover.css"><link rel="stylesheet" href="css/portfolio.css"><link rel="stylesheet" href="css/track.css">
-<link rel="stylesheet" href="css/watch.css"><link rel="stylesheet" href="css/upkeep.css"><link rel="stylesheet" href="css/perps.css"><link rel="stylesheet" href="css/yield.css"><link rel="stylesheet" href="css/settings.css"><link rel="stylesheet" href="css/shell.css">
+<link rel="stylesheet" href="css/watch.css"><link rel="stylesheet" href="css/upkeep.css"><link rel="stylesheet" href="css/perps.css"><link rel="stylesheet" href="css/yield.css"><link rel="stylesheet" href="css/settings.css"><link rel="stylesheet" href="css/shell.css"><link rel="stylesheet" href="css/ticker.css">
 </head>
 <body>
+<svg class="defs" width="0" height="0" aria-hidden="true" focusable="false"><defs><linearGradient id="n-sol" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#9945ff"/><stop offset="1" stop-color="#14f195"/></linearGradient></defs></svg>
 <header class="top" id="top">
   <button class="btn btn-ghost icon nav-menu" id="nav-menu" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="nav">
     <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
   </button>
   <a class="brand" href="#/" aria-label="Nought home">
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="3.2"/><path d="M6.2 17.8 17.8 6.2" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round"/></svg>
-    <span>nought</span>
+    <svg class="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><ellipse cx="12" cy="12" rx="6.4" ry="9.3" fill="none" stroke="currentColor" stroke-width="3.4"/></svg>
+    <span>NOUGHT</span>
   </a>
   <nav class="tabs" id="nav" aria-label="Pages">
-    <a href="#/discover" data-tab="discover">Discover</a>
-    <a href="#/pulse" data-tab="pulse">Pulse</a>
+    <a href="#/scope" data-tab="pulse">Scope</a>
     <a href="#/track" data-tab="track">Trackers</a>
-    <a href="#/track/vision" data-tab="vision">Vision</a>
-    <a href="#/perps" data-tab="perps">Perps</a>
-    <a href="#/yield" data-tab="yield">Yield</a>
     <a href="#/portfolio" data-tab="portfolio">Portfolio</a>
     <a href="#/watch" data-tab="watch">Watchlist</a>
     <a href="#/upkeep" data-tab="upkeep">Upkeep</a>
     <a href="#/settings" data-tab="settings" class="nav-only-menu">Settings</a>
-    <button type="button" class="nav-only-menu nav-ticker" id="nav-ticker">Watchlist strip</button>
+    <button type="button" class="nav-only-menu nav-ticker" id="nav-ticker">Coin strip</button>
     <button type="button" class="nav-only-menu" id="nav-pnl">Live PnL widget</button>
   </nav>
-  <button class="search" id="search-open" type="button" aria-label="Search tokens (shortcut /)">
-    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-    <span class="s-long">Search coins or paste CA</span><span class="s-short" aria-hidden="true">Search</span><kbd>/</kbd>
-  </button>
   <div class="top-right">
-    <span class="chip fee0" title="Nought adds no fee to any trade">0% fees</span>
+    <button class="search" id="search-open" type="button" aria-label="Search tokens (shortcut /)">
+      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span class="s-long">Search token or CA</span><span class="s-short" aria-hidden="true">Search</span><kbd>/</kbd>
+    </button>
+    <span class="chip fee0 top-fee" title="Nought adds no fee to any trade"><i aria-hidden="true"></i>0% fees</span>
     <div class="presets-bar" id="presets" role="group" aria-label="Trade presets (keys 1, 2, 3)"></div>
-    <button class="btn btn-ghost icon top-ticker" id="ticker-toggle" type="button" aria-label="Watchlist strip" aria-pressed="true" title="Show or hide the watchlist strip"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3Z" fill="var(--f, none)" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
+    <button class="btn btn-ghost icon top-ticker" id="ticker-toggle" type="button" aria-label="Coin strip" aria-pressed="true" title="Show or hide the coin strip"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3Z" fill="var(--f, none)" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
     <button class="btn btn-ghost icon top-pnl" id="pnl-toggle" type="button" aria-label="Live PnL widget" aria-pressed="false" title="Show or hide the live PnL widget"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M3.5 19.5h17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity=".45"/><path d="m4 15.5 4.5-5 3.5 3 6.5-7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 6h3.5v3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <div class="pop-wrap" id="bell-wrap">
       <button class="btn btn-ghost icon" id="bell-btn" type="button" aria-label="Notifications" aria-haspopup="dialog" aria-expanded="false" aria-controls="bell-pop"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16Zm4 4a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg><span class="badge" id="bell-badge" hidden></span></button>
       <div class="pop bell-pop" id="bell-pop" role="dialog" aria-label="Notifications" hidden></div>
     </div>
     <a class="btn btn-ghost icon top-gear" id="settings-btn" href="#/settings" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1c.5.4 1.1.8 1.7 1l.4 2.5h4l.4-2.5c.6-.2 1.2-.6 1.7-1l2.4 1 2-3.4-2-1.6ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1)"/></svg></a>
+    <button class="btn btn-accent top-dep" id="deposit-btn" type="button" hidden>Deposit</button>
     <div class="pop-wrap" id="wallet-wrap">
       <button class="wpill" id="wallet-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="wallet-menu">Connect</button>
       <div class="pop wmenu" id="wallet-menu" role="menu" aria-label="Wallet" hidden></div>
@@ -68,30 +67,56 @@
 </header>
 
 <div class="ticker" id="ticker" hidden>
-  <div class="tk-viewport" id="tk-viewport"><div class="tk-track" id="tk-track"></div></div>
-  <button class="tk-x" id="tk-hide" type="button" aria-label="Hide the watchlist strip" title="Hide (bring it back with the star in the top bar)"><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+  <div class="tk-src" role="group" aria-label="What the strip shows">
+    <button type="button" data-tk-src="hold" aria-pressed="false" aria-label="Your holdings" data-tip="Your holdings" data-tip-pos="bottom"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v4M4 7.5v10A1.5 1.5 0 0 0 5.5 19H20v-4M4 7.5A2.5 2.5 0 0 0 6.5 10H20v5h-4a2.5 2.5 0 0 1 0-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
+    <button type="button" data-tk-src="watch" aria-pressed="false" aria-label="Watchlist" data-tip="Watchlist" data-tip-pos="bottom"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
+    <button type="button" data-tk-src="recent" aria-pressed="false" aria-label="Recently viewed" data-tip="Recently viewed" data-tip-pos="bottom"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button type="button" data-tk-src="trend" aria-pressed="false" aria-label="Trending, last hour" data-tip="Trending, last hour" data-tip-pos="bottom"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 21c-4 0-6.5-2.7-6.5-6.2 0-3.3 2.3-5.4 3.6-8.3.4 2.2 1.6 3.4 2.6 3.9-.1-2.8 1.3-5.6 3.6-7.4-.1 3.7 3.2 5.8 3.2 10.4 0 4.3-2.6 7.6-6.5 7.6Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
+  </div>
+  <div class="tk-viewport" id="tk-viewport"><div class="tk-track" id="tk-track" role="group" aria-label="Coins"></div></div>
+  <button class="tk-x" id="tk-hide" type="button" aria-label="Hide the coin strip" title="Hide (bring it back with the star in the top bar)"><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
 </div>
 
 <main id="view"></main>
 
 <footer class="status" id="status">
-  <span class="st-conn">
-    <span class="st-i" id="st-pp" title="pump.fun launch stream"><i class="dot" id="feed-dot"></i><span class="st-l">Stream</span></span>
-    <span class="st-i" id="st-jup" title="Jupiter Pulse feed"><i class="dot" id="dot-jup"></i><span class="st-l">Jupiter</span></span>
-    <span class="st-i" id="st-rpc" title="Solana RPC"><i class="dot" id="dot-rpc"></i><span class="st-l">RPC</span></span>
-  </span>
-  <span class="st-feed" id="feed-text">Connecting to pump.fun…</span>
-  <span class="st-mkts mono" id="st-mkts" hidden></span>
-  <button class="st-chip mono" id="st-preset" type="button" title="Active trade preset: click to edit"></button>
-  <span class="st-saved mono" id="st-saved" title="What a typical 1% terminal fee would have cost on trades made in this browser"></span>
+  <div class="pop-wrap st-pre-wrap">
+    <button class="st-preset" id="st-preset" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="st-pre-menu"></button>
+    <div class="pop st-pop st-pre-menu" id="st-pre-menu" role="menu" aria-label="Trade presets" hidden></div>
+  </div>
+  <button class="st-wal" id="st-wallet" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="wallet-menu" hidden></button>
+  <a class="st-ic" href="#/settings" aria-label="Settings" data-tip="Settings"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.4 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1c.5.4 1.1.8 1.7 1l.4 2.5h4l.4-2.5c.6-.2 1.2-.6 1.7-1l2.4 1 2-3.4-2-1.6ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z" transform="translate(-1)"/></svg></a>
+  <span class="st-div" aria-hidden="true"></span>
+  <nav class="st-links" aria-label="Shortcuts">
+    <a href="#/scope" data-tip="Scope"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M3 12h4l2.5-6 4 12 2.5-6h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Scope</span></a>
+    <button type="button" data-st="trackers" aria-pressed="false" data-tip="Trackers panel: your wallets' trades, live"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>Trackers</span></button>
+    <a href="#/watch" data-tip="Watchlist"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Watchlist</span></a>
+    <button type="button" data-st="pnl" id="st-pnl" aria-pressed="false" data-tip="Live PnL widget"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M5 19V13M10 19V8M15 19v-5M20 19V5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span>PnL</span></button>
+  </nav>
   <span class="sep"></span>
+  <span class="st-saved mono" id="st-saved" title="What a typical 1% terminal fee would have cost on trades made in this browser"></span>
+  <span class="sep" aria-hidden="true"></span>
+  <span class="st-mkts" id="st-mkts" hidden></span>
+  <div class="pop-wrap st-conn-wrap">
+    <button class="st-conn" id="st-conn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="st-conn-pop"><i class="dot" id="st-conn-dot" aria-hidden="true"></i><span id="st-conn-l">Connecting</span><svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div class="pop st-pop st-conn-pop" id="st-conn-pop" role="dialog" aria-label="Connection status" hidden>
+      <div class="st-ph">Connections</div>
+      <div class="st-row" id="st-pp"><i class="dot" id="feed-dot" aria-hidden="true"></i><b>Stream</b><span id="st-pp-t">pump.fun launch stream: starting</span></div>
+      <div class="st-row" id="st-jup"><i class="dot" id="dot-jup" aria-hidden="true"></i><b>Jupiter</b><span id="st-jup-t">Scope feed: starting</span></div>
+      <div class="st-row" id="st-rpc"><i class="dot" id="dot-rpc" aria-hidden="true"></i><b>RPC</b><span id="st-rpc-t">Solana RPC: checking</span></div>
+      <div class="st-feed" id="feed-text">Connecting to pump.fun…</div>
+      <a class="st-pl" href="#/settings/network">RPC and network settings</a>
+    </div>
+  </div>
+  <span class="st-div st-div-r" aria-hidden="true"></span>
+  <a class="st-link st-x" href="https://x.com/Nought0Fees" target="_blank" rel="noopener" title="Nought on X: @Nought0Fees" aria-label="Nought on X"><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.2L2 3h6.33l4.37 5.77L17.75 3Zm-1.08 16.2h1.7L7.4 4.73H5.58L16.67 19.2Z"/></svg></a>
   <a class="st-link" id="st-source" href="README.md" target="_blank" rel="noopener">Source</a>
   <a class="st-link" href="#/upkeep">Docs</a>
   <span class="st-fee0" title="Nought adds no fee to any trade">0% fees</span>
 </footer>
 
 <dialog id="settings" aria-labelledby="qs-title"><form method="dialog" class="dlg"><div class="dlg-top"><h2 id="qs-title">Trade presets</h2><a class="dlg-link" href="#/settings/presets" data-close>All settings</a></div><div class="dlg-body"></div><div class="row-end"><button class="btn btn-accent" value="ok">Done</button></div></form></dialog>
-<dialog id="wallets" aria-labelledby="wp-title"><form method="dialog" class="dlg"><h2 id="wp-title" tabindex="-1" autofocus>Connect a wallet</h2><p class="hint">Nought never sees your keys. Your wallet signs and sends every trade.</p><div class="wallet-list" id="wallet-list"></div><div class="row-end"><button class="btn btn-ghost" value="cancel">Cancel</button></div></form></dialog>
+<dialog id="wallets" aria-labelledby="wp-title"><form method="dialog" class="dlg"><h2 id="wp-title" tabindex="-1" autofocus>Connect a wallet</h2><p class="hint">Extension wallets sign every trade themselves. Imported or created wallets stay encrypted in this browser and never leave it.</p><div class="wallet-list" id="wallet-list"></div><div class="row-end"><button class="btn btn-ghost" value="cancel">Cancel</button></div></form></dialog>
 <dialog id="search-dlg" class="search-dlg" aria-label="Search tokens">
   <div class="sdlg">
     <div class="sq">

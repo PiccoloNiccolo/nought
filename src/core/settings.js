@@ -13,6 +13,9 @@ const DEFAULTS = {
     { name: 'P3', buy: 1, sellPct: 25, slippage: 10, prio: 'normal', mev: 'off' },
   ],
   rpc: '',          // empty: the public RPCs in RPCS
+  // tools/meta-relay.mjs: reads token metadata browsers cannot and pre-reads every launch (see core/meta.js). Nought's
+  // hosted copy by default; '' turns it off. It holds no keys and only returns a coin's picture link, name and links.
+  metaRelay: 'https://nought-relay-production.up.railway.app',
   stretch: 45,      // bonding-curve % where a coin moves into "Final stretch"
   sounds: false,    // a soft tick when a new pair lands
   compact: false,   // denser Pulse rows
@@ -32,6 +35,11 @@ const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 function validRpc(u) {
   if (typeof u !== 'string' || u.length > 200 || !/^https:\/\/[^\s"'<>`\\]+$/.test(u)) return false;
   try { return !!new URL(u).hostname; } catch { return false; }
+}
+// https, or a relay on this computer (http://127.0.0.1 or localhost); no path, query or credentials
+function validRelay(u) {
+  if (typeof u !== 'string' || u.length > 200) return false;
+  try { const x = new URL(u); return !x.username && !x.password && (x.pathname === '/' || x.pathname === '') && !x.search && !x.hash && (x.protocol === 'https:' || (x.protocol === 'http:' && /^(127\.0\.0\.1|localhost)$/.test(x.hostname))); } catch { return false; }
 }
 function cleanPreset(p, base) {
   if (!plain(p)) return { ...base };
@@ -59,6 +67,7 @@ function clean(s, base = DEFAULTS) {
     preset: Number.isInteger(pi) && pi >= 0 && pi < 3 ? pi : base.preset,
     presets: DEFAULTS.presets.map((d, i) => cleanPreset(list[i], base.presets?.[i] || d)),
     rpc: o.rpc === '' || o.rpc == null ? '' : validRpc(o.rpc) ? o.rpc : base.rpc,
+    metaRelay: o.metaRelay == null ? base.metaRelay : o.metaRelay === '' ? '' : validRelay(o.metaRelay) ? new URL(o.metaRelay).origin : base.metaRelay,
     stretch: st >= 1 && st <= 99 ? st : base.stretch,
     sounds: typeof o.sounds === 'boolean' ? o.sounds : base.sounds,
     compact: typeof o.compact === 'boolean' ? o.compact : base.compact,

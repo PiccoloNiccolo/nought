@@ -1,6 +1,6 @@
 // Token page (#/t/<mint>): header (identity, links, market cap, price, liquidity, holders, supply, ATH, bonding curve),
-// stats strip (5m / 1h / 6h / 24h), chart (./token/chart.js), trade panel (./token/panel.js), bottom tabs, audit,
-// similar coins and the trader scan drawer (built by the token-tabs owner), plus the Instant trade panel.
+// chart (./token/chart.js), bottom tabs, and the trade column on the right: the stats block (5m / 1h / 6h / 24h), the
+// trade panel (./token/panel.js), token info (audit), similar coins; plus the trader scan drawer and the Instant panel.
 //
 // Sub-modules export mount functions (el, ctx) => cleanup. ctx:
 //   mint                  the coin's address
@@ -18,10 +18,11 @@
 import { esc, on, emit, usd, pct, cls, ago, short, safeUrl, LS, ICON, toast, copy, isMint, parseTarget } from '../core/util.js';
 import { tokens, upsert, mcUsd, changed } from '../core/store.js';
 import { wantMeta, applyPair } from '../core/meta.js';
+import { wantUri } from '../core/chain-meta.js';
 import { jt, jc, ds } from '../core/jup.js';
 import { rpc } from '../core/rpc.js';
 import { register } from '../core/router.js';
-import { avatar, socials } from '../ui/card.js';
+import { avatar, socials, lpInfo } from '../ui/card.js';
 import { watchlist, isWatched, toggleWatch } from '../core/watchlist.js';
 import { chartBridge, mountChart, fmtPrice, cnum, int, plainNum } from './token/chart.js';
 import { mountPanel } from './token/panel.js';
@@ -48,7 +49,7 @@ register({
   title: ([m]) => `${tokens.get(m)?.symbol ? '$' + tokens.get(m).symbol : 'Token'} · Nought`,
   mount(view, [mint]) {
     if (!isMint(mint)) { view.innerHTML = '<div class="empty">That is not a coin address.</div>'; return () => {}; }
-    const S = { alive: true, pair: null, ath: null, curve: null, curveDone: false, loadedJt: false, loadedDs: false, failed: 0, statIv: LS.get('tp.statIv', '1h'), lastRefresh: 0, heads: {} };
+    const S = { alive: true, pair: null, ath: null, curve: null, curveDone: false, loadedJt: false, loadedDs: false, failed: 0, statIv: LS.get('tp.statIv', '1h'), lastRefresh: 0, heads: {}, dex: null };
     if (!STAT_IVS.includes(S.statIv)) S.statIv = '1h';
     const known = tokens.has(mint);
     if (!known) upsert(mint, {});
@@ -66,17 +67,33 @@ register({
       chart: bridge.api,
     };
 
+    // desktop: the trade column runs the full height on the right; header, chart and tabs stack on the left
     view.innerHTML = `<div class="tkp">
       <header class="tp-head"><div class="tp-id" data-h="id"></div><div class="tp-figs hfade" data-h="figs"></div>
         <div class="tp-acts"><button type="button" class="btn btn-ghost sm icon tp-bell" data-act="alert" title="Set a price or market-cap alert" aria-label="Set a price or market-cap alert" aria-haspopup="dialog">${ICON.bell}</button><button type="button" class="btn btn-ghost sm tp-instant" data-act="instant" title="Instant trade panel (i)">${ICON.bolt}<span>Instant</span></button></div></header>
-      <div class="tp-stats hfade" data-h="stats"></div>
       <section class="tp-chart" aria-label="Chart"></section>
-      <aside class="tp-side"><div class="tp-trade"></div><div class="tp-audit"></div><div class="tp-similar"></div></aside>
+      <aside class="tp-side"><div class="tp-stats" data-h="stats" aria-label="Trading stats"></div><div class="tp-ivm" role="menu" aria-label="Stats window" hidden>${STAT_IVS.map((v) => `<button type="button" role="menuitemradio" aria-checked="false" data-siv="${v}">${v}</button>`).join('')}</div><div class="tp-trade"></div><div class="tp-audit"></div><div class="tp-similar"></div></aside>
       <section class="tp-tabs" aria-label="Trades, holders and more"></section>
       <div class="tp-scan"></div>
       <dialog class="tp-adlg" aria-labelledby="tp-adlg-h"><form method="dialog" class="dlg tp-al"></form></dialog>
     </div>`;
-    const root = view.querySelector('.tkp');
+    const root = view.querySelector('.tkp'), ivm = root.querySelector('.tp-ivm');
+    // drag the top edge of the tabs panel to resize it (like Axiom); double-click resets it
+    {
+      const tabsEl = root.querySelector('.tp-tabs'), grip = document.createElement('div');
+      grip.className = 'tp-grip'; grip.setAttribute('role', 'separator'); grip.setAttribute('aria-orientation', 'horizontal'); grip.title = 'Drag to resize · double-click to reset';
+      root.appendChild(grip); void tabsEl;
+      const apply = (h) => { if (h > 0) root.style.setProperty('--tabs-h', h + 'px'); else root.style.removeProperty('--tabs-h'); root.classList.toggle('tabs-sized', h > 0); };
+      apply(Number(LS.get('tp.tabsH', 0)) || 0);
+      grip.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault(); grip.setPointerCapture(e.pointerId); root.classList.add('tabs-drag');
+        const r = root.getBoundingClientRect(), move = (ev) => apply(Math.round(Math.max(160, Math.min(r.height - 220, r.bottom - ev.clientY))));
+        const up = () => { grip.removeEventListener('pointermove', move); root.classList.remove('tabs-drag'); LS.set('tp.tabsH', parseInt(root.style.getPropertyValue('--tabs-h')) || 0); window.dispatchEvent(new Event('resize')); };
+        grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up, { once: true }); grip.addEventListener('lostpointercapture', up, { once: true });
+      });
+      grip.addEventListener('dblclick', () => { apply(0); LS.set('tp.tabsH', 0); window.dispatchEvent(new Event('resize')); });
+    }
     const part = (k) => root.querySelector(`[data-h="${k}"]`);
 
     // ---------- header ----------
@@ -90,14 +107,24 @@ register({
       const links = [[`https://solscan.io/token/${mint}`, 'Solscan', LK.explorer], [safeUrl(p?.url), 'Dexscreener', LK.chart], [t.launchpad === 'pump.fun' || /pump$/.test(mint) ? `https://pump.fun/coin/${mint}` : '', 'pump.fun', LK.launch], [`https://x.com/search?q=${mint}&f=live`, 'Search X for this address', LK.searchX]]
         .map(([u, l, ic]) => [/^https:\/\//.test(u || '') ? safeUrl(u) : '', l, ic]).filter(([u]) => u);
       const star = isWatched(mint);
-      setHtml('id', `${avatar({ ...t, symbol: sym || short(mint, 2) })}
+      // Dexscreener: when the profile/ad was paid (a link to the pair), and the project links its paid profile lists
+      // that the socials above don't already show (Discord, a second website, ...)
+      const paid = S.dex?.orders?.filter((o) => o.status === 'approved' && o.at > 0).sort((a, b) => a.at - b.at)[0];
+      const dexBadge = paid ? `<a class="flag tp-dexf" href="${esc(safeUrl(p?.url) || `https://dexscreener.com/solana/${mint}`)}" target="_blank" rel="noopener nofollow" title="Dexscreener ${esc(paid.type === 'communityTakeover' ? 'community takeover' : 'profile')} paid ${esc(new Date(paid.at).toLocaleString())}">DEX ${paid.type === 'communityTakeover' ? 'CTO' : 'paid'} · ${esc(ago(paid.at))}</a>` : '';
+      const shown = new Set([t.twitter, t.telegram, t.website].filter(Boolean).map((u) => String(u).replace(/\/$/, '')));
+      const extra = [...(p?.info?.websites || []).map((w) => [w?.url, w?.label || 'Website']), ...(p?.info?.socials || []).map((x) => [x?.url, x?.type ? x.type[0].toUpperCase() + x.type.slice(1) : 'Link'])]
+        .map(([u, l]) => [safeUrl(u), String(l).slice(0, 16)]).filter(([u]) => u && !shown.has(u.replace(/\/$/, ''))).slice(0, 4);
+      const dexLinks = extra.map(([u, l]) => `<a class="flag tp-dexl" href="${esc(u)}" target="_blank" rel="noopener nofollow" title="${esc(u)}">${esc(l)}</a>`).join('');
+      // the picture sits in a frame tinted with the launchpad's colour (pump.fun green, Bonk orange, ...)
+      const lpCol = (lpInfo(t.launchpad) || (/pump$/.test(mint) ? lpInfo('pump.fun') : null))?.color || '';
+      setHtml('id', `<div class="tp-avf${lpCol ? '' : ' none'}" style="${lpCol ? `--lp:${esc(lpCol)}` : ''}" title="${esc(lp || 'Launchpad unknown')}">${avatar({ ...t, symbol: sym || short(mint, 2) })}</div>
         <div class="tp-names">
           <div class="tp-l1"><span class="tp-sym">${sym ? esc(sym) : '<span class="dim">Loading…</span>'}</span><span class="tp-nm" title="${esc(name)}">${esc(name)}</span>
-            <button type="button" class="tp-ib tp-ca" data-copy="${esc(mint)}" title="Copy contract address">${ICON.copy}<span class="mono">${esc(short(mint, 4))}</span></button>
+            <button type="button" class="tp-ib tp-ca" data-copy="${esc(mint)}" title="Copy contract address ${esc(mint)}">${ICON.copy}<span class="mono">${esc(short(mint, 4))}</span></button>
             <button type="button" class="tp-ib" data-act="share" title="Share this page" aria-label="Share">${SHARE}</button>
             <button type="button" class="tp-ib tp-star${star ? ' on' : ''}" data-act="star" title="${star ? 'Remove from watchlist' : 'Add to watchlist'}" aria-pressed="${star}" style="--f:${star ? 'var(--warn)' : 'none'}">${ICON.star}</button>
           </div>
-          <div class="tp-l2">${ageKnown && t.created ? `<span class="tp-age mono" data-age="${Number(t.created)}" title="Age"></span>` : ''}${lp ? `<span class="flag">${esc(lp)}</span>` : ''}${t.migrated ? '<span class="flag tp-migf">Migrated</span>' : ''}${t.verified ? '<span class="flag">Verified</span>' : ''}<span class="soc">${socials(t)}</span><span class="tp-lks">${links.map(([u, l, ic]) => `<a class="tp-lk" href="${esc(u)}" target="_blank" rel="noopener nofollow" title="${esc(l)}" aria-label="${esc(l)}">${ic}</a>`).join('')}</span></div>
+          <div class="tp-l2">${ageKnown && t.created ? `<span class="tp-age mono" data-age="${Number(t.created)}" title="Age"></span>` : ''}${lp ? `<span class="tp-lp" style="${lpCol ? `--lp:${esc(lpCol)}` : ''}">${esc(lp)}</span>` : ''}${t.migrated ? '<span class="flag tp-migf">Migrated</span>' : ''}${t.verified ? '<span class="flag">Verified</span>' : ''}<span class="soc">${socials(t)}</span>${dexBadge}${dexLinks}<span class="tp-lks">${links.map(([u, l, ic]) => `<a class="tp-lk" href="${esc(u)}" target="_blank" rel="noopener nofollow" title="${esc(l)}" aria-label="${esc(l)}">${ic}</a>`).join('')}</span></div>
         </div>`);
       const age = part('id').querySelector('.tp-age'); if (age && !age.textContent) age.textContent = ago(Number(age.dataset.age)); // the shell ticks it after this
       const l2 = part('id').querySelector('.tp-l2'); if (l2) l2.classList.toggle('ovf', l2.scrollWidth > l2.clientWidth + 1); // fade the cut edge only when something is cut
@@ -106,7 +133,7 @@ register({
       const liq = t.liquidity ?? p?.liquidity?.usd, ath = S.ath != null ? Math.max(S.ath, mc || 0) : null;
       const prog = !t.migrated ? (S.curve ?? (t.progress > 0 ? t.progress : null)) : null;
       const cells = [
-        `<div class="tp-mc"><span>Market cap</span><b class="mono">${usd(mc)}</b>${ch != null && isFinite(ch) ? `<i class="mono ${cls(ch)}">${pct(Number(ch))} <em>${S.statIv}</em></i>` : ''}</div>`,
+        `<div class="tp-mc" title="Market cap"><b class="mono">${usd(mc)}</b>${ch != null && isFinite(ch) ? `<i class="mono ${cls(ch)}">${pct(Number(ch))} <em>${S.statIv}</em></i>` : ''}</div>`,
         `<div><span>Price</span><b class="mono">${fmtPrice(price)}</b></div>`,
         `<div><span>Liquidity</span><b class="mono">${usd(liq)}</b></div>`,
         `<div><span>Holders</span><b class="mono">${t.holders != null ? int(t.holders) : '—'}</b></div>`,
@@ -116,29 +143,38 @@ register({
       ];
       setHtml('figs', cells.join(''));
       renderStats(t, p);
+      root.querySelector('.tp-ivb')?.setAttribute('aria-expanded', String(!ivm.hidden));
       const title = `${sym ? '$' + sym : 'Token'} · Nought`; if (document.title !== title) document.title = title;
     }
     function curMc() { const t = tokens.get(mint) || { mint }, p = ctx.pair(); return mcUsd(t) || Number(p?.marketCap || p?.fdv) || null; }
     function curPrice() { const t = tokens.get(mint) || { mint }, p = ctx.pair(); return priceUsdOf(t) || Number(p?.priceUsd) || null; }
+    // the stats block at the top of the trade column: window volume, buys and sells (count / USD), net volume and a
+    // two-colour bar, then traders, net buyers and organic volume. The window button opens a small 5m / 1h / 6h / 24h menu.
+    // USD here keeps three significant figures ($508K, $50.7K, $6.99K) so busy coins still fit the 300px column.
+    const cu = (n) => { if (n == null || !isFinite(n)) return '—'; const a = Math.abs(n); for (const [v, u] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']]) if (a >= v * 0.9995) { const x = a / v; return (n < 0 ? '-$' : '$') + x.toFixed(x >= 99.95 ? 0 : x >= 9.995 ? 1 : 2) + u; } return usd(n); };
     function renderStats(t, p) {
       const s = t['stats' + S.statIv];
-      const sel = `<div class="tp-ivsel" role="group" aria-label="Stats window">${STAT_IVS.map((k) => `<button type="button" data-siv="${k}" class="${k === S.statIv ? 'on' : ''}">${k}</button>`).join('')}</div>`;
+      const ivb = `<button type="button" class="tp-ivb" data-ivm aria-haspopup="menu" aria-expanded="false" title="Stats window" aria-label="Stats window: ${S.statIv}">${S.statIv}<svg viewBox="0 0 24 24" width="10" height="10" aria-hidden="true"><path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+      const cell = (label, val, c = '', tip = '') => `<div${tip ? ` title="${esc(tip)}"` : ''}><span>${label}</span><b class="${c}">${val}</b></div>`;
+      const bar = (a, b, tip) => { const tot = a + b, sh = tot > 0 ? (a / tot) * 100 : 50; return `<div class="tp-sbar" title="${esc(tip(sh))}"><s class="b" style="flex:${sh.toFixed(1)}"></s><s class="s" style="flex:${(100 - sh).toFixed(1)}"></s></div>`; };
       if (!s) {
         const vol = S.statIv === '5m' ? p?.volume?.m5 : S.statIv === '1h' ? p?.volume?.h1 : S.statIv === '6h' ? p?.volume?.h6 : p?.volume?.h24;
         const tx = p?.txns?.[{ '5m': 'm5', '1h': 'h1', '6h': 'h6', '24h': 'h24' }[S.statIv]];
-        setHtml('stats', sel + (vol != null || tx ? `<div class="tp-st"><span>Volume</span><b>${usd(vol)}</b></div><div class="tp-st"><span>Buys</span><b class="up">${int(tx?.buys ?? null)}</b></div><div class="tp-st"><span>Sells</span><b class="down">${int(tx?.sells ?? null)}</b></div><div class="tp-st dim">From Dexscreener</div>` : `<div class="tp-st dim">${S.loadedJt ? 'No trading stats for this window yet.' : 'Loading stats…'}</div>`));
+        if (vol == null && !tx) { setHtml('stats', `<div class="tp-sg">${cell(`${ivb} Vol`, '—')}<div class="tp-snote">${S.loadedJt ? 'No trading stats for this window yet.' : 'Loading stats…'}</div></div>`); return; }
+        const b = Number(tx?.buys) || 0, sl = Number(tx?.sells) || 0;
+        setHtml('stats', `<div class="tp-sg">${cell(`${ivb} Vol`, usd(vol))}${cell('Buys', int(tx?.buys ?? null), 'up')}${cell('Sells', int(tx?.sells ?? null), 'down')}${cell('Net Vol.', '—', 'dim')}</div>
+          ${b + sl > 0 ? bar(b, sl, (sh) => `Buys ${sh.toFixed(0)}% · sells ${(100 - sh).toFixed(0)}% of trades`) : ''}<div class="tp-sx"><span class="dim">Counts from Dexscreener</span></div>`);
         return;
       }
-      const tot = s.buyVol + s.sellVol, buyShare = tot > 0 ? (s.buyVol / tot) * 100 : 50, net = s.buyVol - s.sellVol;
-      setHtml('stats', sel + `
-        <div class="tp-st"><span>Volume</span><b>${usd(s.vol)}</b></div>
-        <div class="tp-st"><span>Buys</span><b class="up">${int(s.buys)}<i> ${usd(s.buyVol)}</i></b></div>
-        <div class="tp-st"><span>Sells</span><b class="down">${int(s.sells)}<i> ${usd(s.sellVol)}</i></b></div>
-        <div class="tp-st"><span>Net</span><b class="${cls(net)}">${net > 0 ? '+' : ''}${usd(net)}</b></div>
-        <div class="tp-st"><span>Traders</span><b>${int(s.traders)}</b></div>
-        <div class="tp-st"><span>Net buyers</span><b class="${cls(s.netBuyers)}">${s.netBuyers > 0 ? '+' : ''}${int(s.netBuyers)}</b></div>
-        <div class="tp-st" title="Volume from wallets Jupiter scores as organic"><span>Organic</span><b>${usd(s.organicVol)}</b></div>
-        <div class="tp-ratio" title="Buy volume ${buyShare.toFixed(0)}% · sell volume ${(100 - buyShare).toFixed(0)}%"><u><s style="width:${buyShare.toFixed(1)}%"></s></u><span><b class="up">${buyShare.toFixed(0)}%</b> buy · <b class="down">${(100 - buyShare).toFixed(0)}%</b> sell</span></div>`);
+      const net = s.buyVol - s.sellVol;
+      setHtml('stats', `<div class="tp-sg">
+          ${cell(`${ivb} Vol`, usd(s.vol))}
+          ${cell('Buys', `${int(s.buys)}<i>/</i>${cu(s.buyVol)}`, 'up', `${int(s.buys)} buys · ${usd(s.buyVol)}`)}
+          ${cell('Sells', `${int(s.sells)}<i>/</i>${cu(s.sellVol)}`, 'down', `${int(s.sells)} sells · ${usd(s.sellVol)}`)}
+          ${cell('Net Vol.', `${net > 0 ? '+' : ''}${cu(net)}`, cls(net), `Net volume ${net > 0 ? '+' : ''}${usd(net)}`)}
+        </div>
+        ${bar(s.buyVol, s.sellVol, (sh) => `Buy volume ${sh.toFixed(0)}% · sell volume ${(100 - sh).toFixed(0)}%`)}
+        <div class="tp-sx"><span>Traders <b>${int(s.traders)}</b></span><span>Net buyers <b class="${cls(s.netBuyers)}">${s.netBuyers > 0 ? '+' : ''}${int(s.netBuyers)}</b></span><span title="Volume from wallets Jupiter scores as organic">Organic <b>${usd(s.organicVol)}</b></span></div>`);
     }
 
     // ---------- data ----------
@@ -146,7 +182,7 @@ register({
       try {
         const [t] = await jt.search([mint]);
         if (!S.alive) return;
-        if (t) { upsert(mint, t); S.loadedJt = true; const x = tokens.get(mint); if (x?.uri) wantMeta(x); }
+        if (t) { upsert(mint, t); S.loadedJt = true; const x = tokens.get(mint); if (x?.uri) wantMeta(x); else wantUri(mint); } // no URI from Jupiter: read it on-chain, then the metadata (socials)
         else S.failed++;
       } catch { /* rate limit or network: not the same as "not listed" */ }
       render(); notFound();
@@ -160,6 +196,7 @@ register({
         if (t) { if (!S.loadedJt && !known && p.pairCreatedAt) t.created = Number(p.pairCreatedAt); applyPair(t, p); t.pair = p; changed(); }
       } catch { /* Dexscreener is optional */ }
       render();
+      try { S.dex = await ds.orders(mint); if (S.alive) render(); } catch { /* optional */ }
     }
     async function loadAth() {
       try {
@@ -197,7 +234,8 @@ register({
     // ---------- header actions ----------
     root.addEventListener('click', (e) => {
       const b = e.target.closest('button'); if (!b || !root.contains(b)) return;
-      if (b.dataset.siv && b.dataset.siv !== S.statIv) { S.statIv = b.dataset.siv; LS.set('tp.statIv', S.statIv); render(); return; }
+      if ('ivm' in b.dataset) { ivMenu(ivm.hidden); return; }
+      if (b.dataset.siv) { if (STAT_IVS.includes(b.dataset.siv) && b.dataset.siv !== S.statIv) { S.statIv = b.dataset.siv; LS.set('tp.statIv', S.statIv); render(); } ivMenu(false, true); return; }
       if (!b.closest('.tp-head')) return;
       const act = b.dataset.act;
       if (act === 'star') { const yes = toggleWatch(mint); render(); toast(yes ? 'Added to your watchlist. <a href="#/watch">Open watchlist</a>' : 'Removed from your watchlist.', yes ? 'ok' : ''); }
@@ -205,6 +243,24 @@ register({
       else if (act === 'alert') openAlert();
       else if (act === 'instant') toggleInstant(mint);
     });
+    // the stats window menu (5m / 1h / 6h / 24h) under the window button; Escape, Tab or a click elsewhere closes it
+    function ivMenu(open, refocus = false) {
+      ivm.hidden = !open;
+      const btn = root.querySelector('.tp-ivb'); btn?.setAttribute('aria-expanded', String(open));
+      if (open) {
+        ivm.querySelectorAll('[data-siv]').forEach((x) => { const on = x.dataset.siv === S.statIv; x.classList.toggle('on', on); x.setAttribute('aria-checked', String(on)); });
+        (ivm.querySelector('.on') || ivm.querySelector('button'))?.focus();
+      } else if (refocus) btn?.focus();
+    }
+    ivm.addEventListener('keydown', (e) => {
+      const items = [...ivm.querySelectorAll('button')], i = items.indexOf(document.activeElement);
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); ivMenu(false, true); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus(); }
+      else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); items[e.key === 'Home' ? 0 : items.length - 1]?.focus(); }
+      else if (e.key === 'Tab') ivMenu(false);
+    });
+    const onDocDown = (e) => { if (!ivm.hidden && !ivm.contains(e.target) && !e.target.closest?.('.tp-ivb')) ivMenu(false); };
+    document.addEventListener('pointerdown', onDocDown);
     async function share() {
       const url = location.href.split('#')[0] + '#/t/' + mint, sym = tokens.get(mint)?.symbol;
       if (navigator.share && matchMedia('(pointer: coarse)').matches) { try { await navigator.share({ title: `${sym ? '$' + sym : 'Coin'} on Nought`, url }); return; } catch { /* cancelled */ } }
@@ -332,7 +388,7 @@ register({
       S.alive = false;
       try { if (dlg.open) dlg.close(); } catch { /* gone */ }
       timers.forEach(clearInterval); clearTimeout(rt);
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey); document.removeEventListener('pointerdown', onDocDown);
       for (const c of cleanups.splice(0)) { try { c(); } catch (e) { console.error(e); } }
       offs.forEach((f) => f());
       detachInstant();

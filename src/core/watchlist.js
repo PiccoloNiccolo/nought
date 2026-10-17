@@ -1,5 +1,5 @@
 // The watchlist: the coins the user starred. The single source of truth for every page (token star, Watchlist page,
-// Discover, the watchlist strip). Stored in localStorage 'watch' (LS key, so 'nought.watch') as an array of mints in
+// Discover, the coin strip). Stored in localStorage 'watch' (LS key, so 'nought.watch') as an array of mints in
 // the order they were starred: the same format pages used before this module, so nothing saved is lost.
 //   watchlist           Set of mints (live: kept in step with storage; read it, change it only through the calls below)
 //   isWatched(mint)     → bool

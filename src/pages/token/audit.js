@@ -1,9 +1,10 @@
-// Token audit: a 3×3 grid of safety tiles (green / amber / red, thresholds editable), authority rows, Jupiter Shield
-// warnings, copy rows for the coin and its creator, and a bundle checker. mountAudit(el, ctx) → cleanup.
+// Token info (the audit): two wide tiles (mint and freeze authority) over a 3×3 grid of safety tiles (green / amber /
+// red, thresholds editable), Jupiter Shield warnings, copy rows for the coin and its creator, and a bundle checker.
+// mountAudit(el, ctx) → cleanup.
 // Sources: the store token (Jupiter audit fields), jh holders (shared 15 s cache), ds.orders (Dex paid, cached 10 min,
 // ≤1/s), ju.shield, GeckoTerminal pool info for locked liquidity (throttled fallback lane, cached 10 min here), and jx
 // trade history (shared with the Trades/Top traders tabs) for the bundle heuristic.
-import { esc, isMint, short, LS, ICON } from '../../core/util.js';
+import { esc, isMint, short, LS, ICON, pct } from '../../core/util.js';
 import { ds, ju } from '../../core/jup.js';
 import { gecko } from '../../core/seed.js';
 import {
@@ -29,6 +30,24 @@ function thresholds() {
   return out;
 }
 const grade = (th, v) => (v == null || !isFinite(v) ? 'na' : th.dir === 'high' ? (v >= th.red ? 'bad' : v >= th.amber ? 'warn' : 'good') : v <= th.red ? 'bad' : v <= th.amber ? 'warn' : 'good');
+// tile labels (the threshold editor keeps the longer DEFAULTS labels) and a small line icon per tile, drawn for Nought
+const SHORT = { top10: 'Top 10 H.', dev: 'Dev H.', snipers: 'Snipers H.', insiders: 'Insiders H.', clusters: 'Clusters', lp: 'LP locked', holders: 'Holders', organic: 'Organic', dexpaid: 'Dex paid', mint: 'Mint authority', freeze: 'Freeze authority' };
+// Dexscreener order types in words (the Dex paid caption)
+const ORDER_T = { tokenProfile: 'profile', communityTakeover: 'community takeover', tokenAd: 'ad', trendingBarAd: 'trending bar ad' };
+const ic = (d) => `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const TIC = {
+  top10: ic('<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.9-3.2 3-4.9 5.5-4.9s4.6 1.7 5.5 4.9M15.5 4.6a3.2 3.2 0 0 1 0 6.3M17.4 14.4c1.6.6 2.7 2.1 3.1 4.6"/>'),
+  dev: ic('<circle cx="12" cy="8" r="3.6"/><path d="M5 20c1-3.6 3.7-5.5 7-5.5s6 1.9 7 5.5"/>'),
+  snipers: ic('<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="1.6"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/>'),
+  insiders: ic('<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/>'),
+  clusters: ic('<circle cx="7" cy="7.5" r="3"/><circle cx="17" cy="7.5" r="3"/><circle cx="12" cy="17" r="3"/><path d="M9.6 9.3l1.2 5M14.4 9.3l-1.2 5M10 7.5h4"/>'),
+  lp: ic('<path d="M12 3.5s6 6.4 6 10.6a6 6 0 0 1-12 0C6 9.9 12 3.5 12 3.5Z"/>'),
+  holders: ic('<circle cx="12" cy="7.5" r="3.4"/><path d="M5 20c.9-3.7 3.6-5.6 7-5.6s6.1 1.9 7 5.6"/>'),
+  organic: ic('<path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14"/><path d="M5 19c3-4 6-6.5 9-8"/>'),
+  dexpaid: ic('<path d="M12 3 4.5 6v5.5c0 4.2 3 7.8 7.5 9.5 4.5-1.7 7.5-5.3 7.5-9.5V6L12 3Z"/><path d="m8.8 12 2.3 2.3 4.2-4.6"/>'),
+  mint: ic('<circle cx="12" cy="12" r="8.5"/><path d="M12 8v8M8 12h8"/>'),
+  freeze: ic('<path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9.5 4.5 12 6.5l2.5-2M9.5 19.5 12 17.5l2.5 2"/>'),
+};
 
 // locked liquidity per pool (GeckoTerminal is slow and strict: one look per pool every 10 minutes)
 const LP = new Map();
@@ -64,7 +83,7 @@ function bundlesOf(txs) {
 export function mountAudit(el, ctx) {
   const mint = ctx.mint, offs = [], timers = [];
   const S = { alive: true, dex: null, dexErr: false, shield: null, shieldErr: false, lp: undefined, lpPool: '', edit: false, bundle: { running: false, stopped: false } };
-  el.innerHTML = '<div class="tt tt-audit"><div class="tt-ah"><h3>Audit</h3><button class="tt-link" data-thr>Thresholds</button></div><div class="tt-aud-in"></div></div>';
+  el.innerHTML = `<div class="tt tt-audit"><div class="tt-ah"><h3>Token info</h3><button class="tt-x tt-thr-b" data-thr title="Thresholds: when tiles turn amber or red" aria-label="Edit thresholds">${ic('<circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/>')}</button></div><div class="tt-aud-in"></div></div>`;
   const root = el.querySelector('.tt-audit'), box = root.querySelector('.tt-aud-in');
 
   function tiles() {
@@ -73,36 +92,47 @@ export function mountAudit(el, ctx) {
     const pool = poolOf(t);
     const f = (v, d = 1) => (v == null || !isFinite(v) ? '—' : Number(v).toFixed(d) + '%');
     // sub: the one-line caption under the value; tip: the longer explanation in its tooltip
-    const lp = onCurve(t) ? { v: 'In curve', g: 'good', sub: 'launchpad curve', tip: 'Liquidity sits in the launchpad curve' }
+    const lp = onCurve(t) ? { v: 'In curve', g: 'good', lab: 'Liquidity', sub: 'launchpad curve', tip: 'Liquidity sits in the launchpad curve' }
       : S.lp === undefined ? { v: '—', g: 'na', sub: freshPool(t) ? 'checking soon' : pool ? 'checking…' : 'pool unknown', tip: freshPool(t) ? 'The pool just opened; checking soon' : '' }
       : S.lp === null ? { v: '—', g: 'na', sub: 'not reported' }
       : { v: f(S.lp, 0), g: S.lp >= 95 ? 'good' : S.lp >= 50 ? 'warn' : 'bad', sub: 'locked or burned', tip: 'Share of pool liquidity locked or burned (GeckoTerminal)' };
     const dexPaid = S.dex ? S.dex.paid : t.dexPaid;
-    const holders = t.holders ?? hd?.count;
+    // Jupiter's holderChange is a percentage change over the window, not a count
+    const holders = t.holders ?? hd?.count, hc = Number(t.stats1h?.holderChange) || 0;
     const list = [
       { k: 'top10', v: t.top10Pct, txt: f(t.top10Pct), sub: 'of supply', tip: 'Share of supply in the 10 largest wallets' },
       { k: 'dev', v: t.devPct, txt: f(t.devPct, 2), sub: t.dev ? short(t.dev) : 'creator unknown', tip: t.dev ? 'Held by the creator ' + t.dev : '' },
       { k: 'snipers', v: t.sniperPct, txt: f(t.sniperPct), sub: 'early snipers', tip: 'Share of supply held by early snipers' },
       { k: 'insiders', v: t.insiderPct, txt: f(t.insiderPct), sub: 'insiders', tip: 'Share of supply held by insiders' },
       { k: 'clusters', v: cl?.pct, txt: cl ? f(cl.pct) : hs?.err ? '—' : '…', sub: cl ? (cl.groups.length ? `${cl.groups.length} funder${cl.groups.length > 1 ? 's' : ''} · ${cl.wallets} wallets` : 'none found') : 'shared funders', tip: cl ? (cl.groups.length ? `${cl.wallets} top holders share ${cl.groups.length} funding wallet${cl.groups.length > 1 ? 's' : ''} (heuristic)` : 'No top holders share a funding wallet (heuristic)') : 'Top holders that share a funding wallet (heuristic)' },
-      { k: 'lp', label: 'Liquidity', txt: lp.v, g: lp.g, sub: lp.sub, tip: lp.tip },
-      { k: 'holders', v: holders, txt: int(holders), sub: t.stats1h?.holderChange ? `${t.stats1h.holderChange > 0 ? '+' : ''}${Math.abs(t.stats1h.holderChange) < 10 ? Number(t.stats1h.holderChange).toFixed(1) : int(t.stats1h.holderChange)} in 1h` : 'wallets', tip: 'Wallets holding the coin' },
+      { k: 'lp', label: 'Liquidity', lab: lp.lab, txt: lp.v, g: lp.g, sub: lp.sub, tip: lp.tip },
+      { k: 'holders', v: holders, txt: int(holders), sub: hc ? `${pct(hc)} in 1h` : '', tip: 'Wallets holding the coin' },
       { k: 'organic', v: t.organicScore, txt: t.organicScore != null ? Math.round(t.organicScore) + '' : '—', sub: t.organicLabel ? String(t.organicLabel) : 'Jupiter score', tip: 'Real-trader activity score from Jupiter (0 to 100)' },
-      { k: 'dexpaid', label: 'Dex paid', txt: dexPaid == null ? (S.dexErr ? '—' : '…') : dexPaid ? 'Paid' : 'No', g: dexPaid == null ? 'na' : dexPaid ? 'good' : 'warn', sub: S.dex?.orders?.length ? S.dex.orders.filter((o) => o.status === 'approved').map((o) => o.type).slice(0, 2).join(', ') || 'Dexscreener' : 'profile or ads', tip: 'Whether the coin paid for a Dexscreener profile or ads' },
+      { k: 'dexpaid', label: 'Dex paid', txt: dexPaid == null ? (S.dexErr ? '—' : '…') : dexPaid ? 'Paid' : 'No', g: dexPaid == null ? 'na' : dexPaid ? 'good' : 'warn', sub: S.dex?.orders?.length ? S.dex.orders.filter((o) => o.status === 'approved').map((o) => ORDER_T[o.type] || o.type).slice(0, 2).join(', ') || 'Dexscreener' : 'profile or ads', tip: 'Whether the coin paid for a Dexscreener profile or ads' },
     ];
+    // value (with its icon, coloured by grade) on top, the short label under it; the caption and the thresholds sit in
+    // the tooltip, and the caption also shows as a third line on touch screens (no hover there to open a tooltip)
     return list.map((x) => {
       const def = th[x.k], g = x.g || grade(def, x.v);
-      return `<div class="tt-tile g-${g}" title="${def ? esc(`${def.label}: amber ${def.dir === 'high' ? '≥' : '≤'} ${def.amber}${def.unit}, red ${def.dir === 'high' ? '≥' : '≤'} ${def.red}${def.unit}`) : ''}"><span>${esc(x.label || def.label)}</span><b>${esc(x.txt)}</b><small title="${esc(x.tip || x.sub)}">${esc(x.sub)}</small></div>`;
+      const tip = [x.tip || '', x.sub && x.sub !== x.tip ? x.sub : '', def ? `amber ${def.dir === 'high' ? '≥' : '≤'} ${def.amber}${def.unit}, red ${def.dir === 'high' ? '≥' : '≤'} ${def.red}${def.unit}` : ''].filter(Boolean).join(' · ');
+      return `<div class="tt-tile g-${g}" title="${esc(`${x.label || def.label}: ${tip}`)}"><b>${TIC[x.k] || ''}<em>${esc(x.txt)}</em></b><span>${esc(x.lab || SHORT[x.k] || x.label || def.label)}</span>${x.sub ? `<small>${esc(x.sub)}</small>` : ''}</div>`;
     }).join('');
+  }
+  // the two wide tiles on top: mint and freeze authority
+  function authTiles() {
+    const t = tokOf(ctx);
+    const tile = (k, v, what) => {
+      const g = v === true ? 'good' : v === false ? 'bad' : 'na', txt = v === true ? 'Revoked' : v === false ? 'Active' : 'Unknown';
+      const tip = v === true ? `${SHORT[k]} revoked: the creator cannot ${what}` : v === false ? `${SHORT[k]} active: the creator can still ${what}` : `${SHORT[k]} not known yet`;
+      return `<div class="tt-tile wide g-${g}" title="${esc(tip)}"><b>${TIC[k]}<em>${txt}</em></b><span>${SHORT[k]}</span></div>`;
+    };
+    return tile('mint', t.mintAuthDisabled, 'mint more') + tile('freeze', t.freezeAuthDisabled, 'freeze wallets');
   }
   function rows() {
     const t = tokOf(ctx), warns = S.shield || [];
-    const auth = (v, what) => (v === true ? `<b class="up">Revoked</b>` : v === false ? `<b class="down">Active</b><small>the creator can still ${what}</small>` : '<b class="dim">Unknown</b>');
     const sev = (s) => (/crit|high|danger|warn/i.test(s) ? 'down' : /med/i.test(s) ? 'warn' : 'muted');
     const xq = (q) => 'https://x.com/search?q=' + encodeURIComponent(q) + '&f=live';
-    return `<div class="tt-arow"><span>Mint authority</span>${auth(t.mintAuthDisabled, 'mint more')}</div>
-      <div class="tt-arow"><span>Freeze authority</span>${auth(t.freezeAuthDisabled, 'freeze wallets')}</div>
-      <div class="tt-arow"><span>Coin</span><b class="mono">${esc(short(mint, 5))}</b><span class="tt-acts"><button class="copy" data-copy="${esc(mint)}" title="Copy address" aria-label="Copy coin address">${ICON.copy}</button><a href="https://solscan.io/token/${esc(mint)}" target="_blank" rel="noopener" title="Solscan" aria-label="Coin on Solscan">${EXT}</a><a href="${esc(xq(mint))}" target="_blank" rel="noopener" title="Search X for this address" aria-label="Search X">${ICON.x}</a></span></div>
+    return `<div class="tt-arow"><span>Coin</span><b class="mono">${esc(short(mint, 5))}</b><span class="tt-acts"><button class="copy" data-copy="${esc(mint)}" title="Copy address" aria-label="Copy coin address">${ICON.copy}</button><a href="https://solscan.io/token/${esc(mint)}" target="_blank" rel="noopener" title="Solscan" aria-label="Coin on Solscan">${EXT}</a><a href="${esc(xq(mint))}" target="_blank" rel="noopener" title="Search X for this address" aria-label="Search X">${ICON.x}</a></span></div>
       ${isMint(t.dev) ? `<div class="tt-arow"><span>Creator</span><button class="tt-w mono" data-scan="${esc(t.dev)}" title="Scan the creator">${esc(short(t.dev, 5))}</button><span class="tt-acts"><button class="copy" data-copy="${esc(t.dev)}" title="Copy address" aria-label="Copy creator address">${ICON.copy}</button><a href="${esc(solscanAcct(t.dev))}" target="_blank" rel="noopener" title="Solscan" aria-label="Creator on Solscan">${EXT}</a><a href="${esc(xq(t.dev))}" target="_blank" rel="noopener" title="Search X for this address" aria-label="Search X">${ICON.x}</a></span></div>` : ''}
       <div class="tt-shield"><span class="tt-sh-h">Jupiter Shield</span>${S.shield == null ? (S.shieldErr ? '<span class="dim">Warnings did not load.</span>' : '<span class="dim">Checking…</span>') : warns.length ? warns.map((w) => `<span class="tt-warn ${sev(w.severity)}" title="${esc(w.message)}">${esc(w.message || w.type)}</span>`).join('') : '<span class="up">No warnings.</span>'}</div>`;
   }
@@ -132,7 +162,8 @@ export function mountAudit(el, ctx) {
   function render() {
     if (!S.alive) return;
     if (S.edit && box.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
-    box.innerHTML = S.edit ? thrEditor() : `<div class="tt-grid">${tiles()}</div>${rows()}${bundleBox()}`;
+    box.innerHTML = S.edit ? thrEditor() : `<div class="tt-grid">${authTiles()}${tiles()}</div>${rows()}${bundleBox()}`;
+    root.querySelector('[data-thr]')?.classList.toggle('on', S.edit);
   }
   let soon = 0;
   const renderSoon = () => { if (!soon) soon = setTimeout(() => { soon = 0; render(); }, 200); };

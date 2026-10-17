@@ -1,7 +1,7 @@
 // Shared, bounded image races. One slow origin must not block the whole board.
 export class ImageQueue {
-  constructor({ load, limit = 12, perHost = 4, hostLimit = () => perHost, backgroundPriority = Infinity, reserve = 0, hostReserve = 0, hedge = 500, timeout = 3500, now = Date.now, later = (fn, ms) => setTimeout(fn, ms), cancelTimer = id => clearTimeout(id), defer = fn => queueMicrotask(fn) } = {}) {
-    Object.assign(this, { load, limit, perHost, hostLimit, backgroundPriority, reserve, hostReserve, hedge, timeout, now, later, cancelTimer, defer });
+  constructor({ load, limit = 12, perHost = 4, hostLimit = () => perHost, backgroundPriority = Infinity, reserve = 0, hostReserve = 0, hedge = 500, timeout = 3500, timeoutFor = null, now = Date.now, later = (fn, ms) => setTimeout(fn, ms), cancelTimer = id => clearTimeout(id), defer = fn => queueMicrotask(fn) } = {}) {
+    Object.assign(this, { load, limit, perHost, hostLimit, backgroundPriority, reserve, hostReserve, hedge, timeout, timeoutFor, now, later, cancelTimer, defer });
     this.jobs = new Map(); this.hosts = new Map(); this.failed = new Map(); this.active = 0; this.scheduled = false;
   }
   request(key, urls, onLoad, onError, priority = 0) {
@@ -49,7 +49,7 @@ export class ImageQueue {
       this.failed.set(url, this.now()); if (this.failed.size > 1500) this.failed.delete(this.failed.keys().next().value);
       this.release(job, attempt); job.hedgeReady = true; this.schedule();
     };
-    attempt.timer = this.later(failure, this.timeout);
+    attempt.timer = this.later(failure, this.timeoutFor?.(url) || this.timeout);
     try { const cancel = this.load(url, success, failure); if (attempt.ended) cancel?.(); else attempt.cancel = cancel; } catch { failure(); }
     // Fill spare slots without waiting for another DOM event.
     this.schedule();

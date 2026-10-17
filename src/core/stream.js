@@ -108,7 +108,7 @@ async function pollTrades(mint) {
   for (const x of fresh) {
     const mc = x.priceUsd * supply;
     if (t) { t.lastTrade = Math.max(t.lastTrade || 0, x.at); if (t.traders?.size < 5000) t.traders.add(x.wallet); if (x.side === 'sell' && t.dev && x.wallet === t.dev) t.devSold = true; }
-    emit('trade', { id: x.id, mint, side: x.side, sol: x.sol, tokens: x.tokens, usd: x.usd, mcUsd: mc, mcSol: sUsd > 0 ? mc / sUsd : 0, wallet: x.wallet, sig: x.sig, at: x.at, pool: x.pool, mev: x.mev, tags: x.tags, backfill: first || undefined });
+    emit('trade', { id: x.id, mint, side: x.side, sol: x.sol, tokens: x.tokens, usd: x.usd, mcUsd: mc, mcSol: sUsd > 0 ? mc / sUsd : 0, wallet: x.wallet, sig: x.sig, at: x.at, pool: x.pool, mev: x.mev, tags: x.tags, cats: x.cats, backfill: first || undefined });
   }
   const last = fresh[fresh.length - 1];
   if (t && last.priceUsd > 0) upsert(mint, { price: last.priceUsd, mcUsd: last.priceUsd * supply });

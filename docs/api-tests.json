@@ -260,7 +260,7 @@
     "cors_ok": false,
     "auth_needed": false,
     "rate_limit": "Method is disabled: always HTTP 429 'Too many requests for a specific RPC call' with x-ratelimit-method-limit: 0, from any Origin (or none). Also fails for the SOL mint.",
-    "notes": "Do not use it. The public RPC (operated by Triton One) also allowlists Origins. Only https://solana.com, https://www.solana.com, https://explorer.solana.com and https://faucet.solana.com get a matching ACAO. Every other Origin tested (example.com, *.netlify.app, localhost, 127.0.0.1, claude.ai, *.claudeusercontent.com, github.io, pump.fun, jup.ag, solscan.io, file://) gets HTTP 403 'Access forbidden' on every method, even getSlot. That 403 carries ACAO '*', so a browser can read the error. The OPTIONS preflight from example.com passes, but the POST itself is 403. With Origin 'null' or no Origin the call gets through, but ACAO comes back as the literal 'backend_traffic', which a browser rejects."
+    "notes": "Do not use it. The public RPC (operated by Triton One) also allowlists Origins. Only https://solana.com, https://www.solana.com, https://explorer.solana.com and https://faucet.solana.com get a matching ACAO. Every other Origin tested (example.com, *.netlify.app, localhost, 127.0.0.1, github.io, pump.fun, jup.ag, solscan.io, file://) gets HTTP 403 'Access forbidden' on every method, even getSlot. That 403 carries ACAO '*', so a browser can read the error. The OPTIONS preflight from example.com passes, but the POST itself is 403. With Origin 'null' or no Origin the call gets through, but ACAO comes back as the literal 'backend_traffic', which a browser rejects."
    },
    {
     "need": "Top holders list with owners resolved (replacement for getTokenLargestAccounts + getMultipleAccounts)",

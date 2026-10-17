@@ -3,12 +3,13 @@
 // a custom background (a local image file), colour pickers, Download PNG and Copy image (ClipboardItem; when the browser
 // can't copy images the PNG is downloaded instead). The token picture is loaded with CORS; if it fails or would taint
 // the canvas, the card draws the ticker's initials instead so export always works. Colours are kept in this browser.
+import { savedVs } from '../core/fee-compare.js';
 import { short, toast, LS, safeUrl, esc, ICON } from '../core/util.js';
 import { imgFallback } from '../core/meta.js';
 
 const W = 1200, H = 675;
 const SANS = '"Geist", ui-sans-serif, system-ui, sans-serif', MONO = '"Geist Mono", ui-monospace, Menlo, monospace';
-const DEF = { bg: '#07080b', up: '#2fd38b', down: '#ff5d6c', fg: '#e7e9ef', usd: true };
+const DEF = { bg: '#06070b', up: '#12af80', down: '#f25461', fg: '#fcfcfc', usd: true };
 const HEX = /^#[0-9a-f]{6}$/i, BRAND = '#38d6f5';
 let bg = null; // the uploaded background {img, url}: kept for this tab only, never stored or sent
 
@@ -42,7 +43,7 @@ async function tokenImage(src) {
 }
 async function fontsReady() {
   if (!document.fonts?.load) return;
-  const want = [`700 120px ${SANS}`, `600 30px ${SANS}`, `600 30px ${MONO}`, `400 20px ${MONO}`].map((f) => document.fonts.load(f).catch(() => {}));
+  const want = [`700 120px ${SANS}`, `600 30px ${SANS}`, `500 24px ${SANS}`, `400 20px ${MONO}`].map((f) => document.fonts.load(f).catch(() => {}));
   await Promise.race([Promise.all(want), new Promise((r) => setTimeout(r, 1500))]);
 }
 
@@ -77,25 +78,25 @@ function draw(cv, d, st, tok) {
     x.stroke();
     x.save(); x.globalAlpha = 0.07; mark(x, W - 190, H / 2 + 30, 170, st.fg); x.restore();
   }
-  rr(x, 1.5, 1.5, W - 3, H - 3, 20); x.strokeStyle = rgba(st.fg, 0.12); x.lineWidth = 3; x.stroke();
+  rr(x, 1.5, 1.5, W - 3, H - 3, 16); x.strokeStyle = rgba(st.fg, 0.1); x.lineWidth = 3; x.stroke();
 
   // brand + 0% fees
   mark(x, 82, 76, 19, st.fg);
   x.fillStyle = st.fg; x.font = `600 34px ${SANS}`; x.textBaseline = 'middle'; x.fillText('nought', 118, 77);
-  x.font = `600 24px ${MONO}`; const chip = '0% fees', cw = x.measureText(chip).width + 40;
-  rr(x, W - 64 - cw, 52, cw, 48, 24); x.fillStyle = rgba(st.up, 0.14); x.fill(); x.strokeStyle = rgba(st.up, 0.6); x.lineWidth = 2; x.stroke();
+  x.font = `600 24px ${SANS}`; const chip = '0% fees', cw = x.measureText(chip).width + 40;
+  rr(x, W - 64 - cw, 52, cw, 48, 24); x.fillStyle = rgba(st.up, 0.14); x.fill(); x.strokeStyle = rgba(st.up, 0.45); x.lineWidth = 2; x.stroke();
   x.fillStyle = st.up; x.fillText(chip, W - 64 - cw + 20, 77);
 
   // token
   const ty = 146, ts = 88;
-  x.save(); rr(x, 64, ty, ts, ts, 18); x.clip();
+  x.save(); rr(x, 64, ty, ts, ts, 10); x.clip();
   if (tok) cover(x, tok, 64, ty, ts, ts);
   else {
     x.fillStyle = rgba(accent, 0.18); x.fillRect(64, ty, ts, ts);
-    x.fillStyle = accent; x.font = `700 34px ${MONO}`; x.textAlign = 'center'; x.fillText((d.symbol || d.mint || '?').slice(0, 2).toUpperCase(), 64 + ts / 2, ty + ts / 2 + 2); x.textAlign = 'left';
+    x.fillStyle = accent; x.font = `700 34px ${SANS}`; x.textAlign = 'center'; x.fillText((d.symbol || d.mint || '?').slice(0, 2).toUpperCase(), 64 + ts / 2, ty + ts / 2 + 2); x.textAlign = 'left';
   }
   x.restore();
-  rr(x, 64, ty, ts, ts, 18); x.strokeStyle = rgba(st.fg, 0.16); x.lineWidth = 2; x.stroke();
+  rr(x, 64, ty, ts, ts, 10); x.strokeStyle = rgba(st.fg, 0.16); x.lineWidth = 2; x.stroke();
   x.textBaseline = 'alphabetic'; x.fillStyle = st.fg;
   fit(x, '$' + (d.symbol || short(d.mint)), 700, 50, W - 420, SANS); x.fillText('$' + (d.symbol || short(d.mint)), 176, ty + 48);
   x.font = `400 22px ${MONO}`; x.fillStyle = rgba(st.fg, 0.5); x.fillText(short(d.mint, 6), 178, ty + 82);
@@ -103,16 +104,22 @@ function draw(cv, d, st, tok) {
   // the result
   const big = d.pnlPct == null ? `${fSol(d.pnlSol)} SOL` : fPct(d.pnlPct);
   fit(x, big, 700, 176, W - 140, SANS); x.fillStyle = accent; x.fillText(big, 58, 448);
-  x.font = `600 40px ${MONO}`; const solTxt = `${fSol(d.pnlSol)} SOL`; x.fillText(solTxt, 64, 512);
-  if (st.usd && d.pnlUsd != null && isFinite(d.pnlUsd)) { const w = x.measureText(solTxt).width; x.fillStyle = rgba(st.fg, 0.6); x.font = `500 34px ${MONO}`; x.fillText(`${fUsd(d.pnlUsd)}`, 64 + w + 22, 512); }
+  x.font = `600 40px ${SANS}`; const solTxt = `${fSol(d.pnlSol)} SOL`; x.fillText(solTxt, 64, 512);
+  if (st.usd && d.pnlUsd != null && isFinite(d.pnlUsd)) { const w = x.measureText(solTxt).width; x.fillStyle = rgba(st.fg, 0.6); x.font = `500 34px ${SANS}`; x.fillText(`${fUsd(d.pnlUsd)}`, 64 + w + 22, 512); }
 
   // stats + footer
-  const stat = (k, v, X) => { x.font = `500 21px ${SANS}`; x.fillStyle = rgba(st.fg, 0.5); x.fillText(k, X, 584); x.font = `600 32px ${MONO}`; x.fillStyle = st.fg; x.fillText(v, X, 624); };
+  const stat = (k, v, X) => { x.font = `500 21px ${SANS}`; x.fillStyle = rgba(st.fg, 0.5); x.fillText(k, X, 584); x.font = `600 32px ${SANS}`; x.fillStyle = st.fg; x.fillText(v, X, 624); };
   stat('Invested', `${fAbs(d.investedSol)} SOL`, 64);
-  stat('Sold for', `${fAbs(d.soldSol)} SOL`, 360);
+  stat('Sold for', `${fAbs(d.soldSol)} SOL`, 300);
+  if (d.avgEntryMc) stat(d.avgExitMc ? 'Avg entry → exit (MC)' : 'Avg entry (MC)', d.avgExitMc ? `${fUsd(d.avgEntryMc).replace(/^\+/, '')} → ${fUsd(d.avgExitMc).replace(/^\+/, '')}` : fUsd(d.avgEntryMc).replace(/^\+/, ''), 536);
   x.textAlign = 'right'; x.font = `500 21px ${SANS}`; x.fillStyle = rgba(st.fg, 0.5);
-  x.fillText('Traded with zero platform fees', W - 64, 584);
-  x.font = `500 24px ${MONO}`; x.fillStyle = rgba(st.fg, 0.75);
+  // what the same trades would have paid on Axiom at its published fee
+  const saved = savedVs(Math.abs(d.investedSol) + Math.abs(d.soldSol))[0];
+  // under the 0% chip, top right: the bottom row is full with the stats
+  x.save(); x.textBaseline = 'middle'; x.font = `500 21px ${SANS}`; x.fillStyle = rgba(st.up, 0.85);
+  x.fillText(saved.sol > 0 ? `Saved ${fAbs(saved.sol)} SOL in fees vs other terminals` : 'Traded with zero platform fees', W - 64, 128);
+  x.restore(); x.textAlign = 'right';
+  x.font = `500 24px ${SANS}`; x.fillStyle = rgba(st.fg, 0.75);
   x.fillText(new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }), W - 64, 624);
   x.restore();
 }
@@ -133,21 +140,24 @@ export async function openPnlCard(input = {}) {
     investedSol: num(input.investedSol), soldSol: num(input.soldSol), pnlSol: num(input.pnlSol),
     pnlPct: input.pnlPct == null || !isFinite(Number(input.pnlPct)) ? null : Number(input.pnlPct),
     pnlUsd: input.pnlUsd == null || !isFinite(Number(input.pnlUsd)) ? null : Number(input.pnlUsd),
+    avgEntryMc: Number(input.avgEntryMc) > 0 ? Number(input.avgEntryMc) : null, avgExitMc: Number(input.avgExitMc) > 0 ? Number(input.avgExitMc) : null,
   };
   let st = loadStyle(), tok = null;
   const dlg = document.createElement('dialog'); dlg.className = 'pnlcard-dlg'; dlg.setAttribute('aria-label', 'PnL card');
   dlg.innerHTML = `<form method="dialog" class="pc">
-    <div class="pc-h"><h2>PnL card</h2><span class="pc-sub mono">${esc(d.symbol ? '$' + d.symbol : short(d.mint))} · 1200×675</span><button class="pc-x" value="cancel" aria-label="Close">${ICON.close}</button></div>
-    <div class="pc-stage"><canvas width="${W}" height="${H}" aria-label="PnL card preview"></canvas></div>
-    <div class="pc-ctl">
-      <label class="btn btn-ghost pc-up">Background image<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label>
-      <button type="button" class="btn btn-ghost" data-pc="nobg">No image</button>
-      <label class="pc-col">Background<input type="color" data-k="bg"></label>
-      <label class="pc-col">Profit<input type="color" data-k="up"></label>
-      <label class="pc-col">Loss<input type="color" data-k="down"></label>
-      <label class="pc-col">Text<input type="color" data-k="fg"></label>
-      <label class="pc-chk"><input type="checkbox" data-k="usd"> USD</label>
-      <button type="button" class="btn btn-ghost" data-pc="reset">Reset</button>
+    <div class="pc-h"><h2>PnL card</h2><span class="pc-sub mono">${esc(d.symbol ? '$' + d.symbol : short(d.mint))} · 1200×675</span><button class="btn btn-ghost icon sm pc-x" value="cancel" aria-label="Close">${ICON.close}</button></div>
+    <div class="pc-body">
+      <div class="pc-stage"><canvas width="${W}" height="${H}" aria-label="PnL card preview"></canvas></div>
+      <div class="pc-ctl">
+        <label class="btn btn-ghost sm pc-up">Background image<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label>
+        <button type="button" class="btn btn-ghost sm" data-pc="nobg">No image</button>
+        <label class="pc-col">Background<input type="color" data-k="bg"></label>
+        <label class="pc-col">Profit<input type="color" data-k="up"></label>
+        <label class="pc-col">Loss<input type="color" data-k="down"></label>
+        <label class="pc-col">Text<input type="color" data-k="fg"></label>
+        <label class="pc-chk"><input type="checkbox" class="switch" data-k="usd"> USD</label>
+        <button type="button" class="btn btn-ghost sm" data-pc="reset">Reset</button>
+      </div>
     </div>
     <div class="pc-foot"><span class="pc-note">Drawn in your browser. Nothing is uploaded.</span><button type="button" class="btn" data-pc="copy">Copy image</button><button type="button" class="btn btn-accent" data-pc="png">Download PNG</button></div>
   </form>`;

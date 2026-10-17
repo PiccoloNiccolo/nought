@@ -4,7 +4,10 @@
 export const $ = (s, el = document) => el.querySelector(s);
 export const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
-export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Text direction controls (U+202A-202E, U+2066-2069, U+200E/200F) are dropped: a coin named "\u202EROHT" would
+// otherwise display reversed as "THOR". Everything shown on a page goes through esc(), so no page can be spoofed this way.
+const BIDI = /[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+export const esc = (s) => String(s ?? '').replace(BIDI, '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // http(s) only, with nothing left in the href that could end an HTML attribute or tag. The URL parser encodes most of
 // these already, but keeps ' in paths and " ' ` in host names: odd hosts are refused, the rest is percent-encoded.
 const HOST_OK = /^(?:[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.?|\[[0-9a-f:.]+\])$/i;
@@ -121,7 +124,11 @@ export async function copy(text) {
 }
 
 export const ICON = {
-  tweet: '<svg class="tweet-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M23.95 4.57a10 10 0 0 1-2.83.78 4.93 4.93 0 0 0 2.17-2.72 9.99 9.99 0 0 1-3.13 1.2 4.92 4.92 0 0 0-8.38 4.48A13.98 13.98 0 0 1 1.64 3.16a4.92 4.92 0 0 0 1.52 6.57 4.9 4.9 0 0 1-2.23-.62v.06a4.92 4.92 0 0 0 3.95 4.83 4.93 4.93 0 0 1-2.22.08 4.93 4.93 0 0 0 4.6 3.42A9.87 9.87 0 0 1 0 19.54a13.96 13.96 0 0 0 7.55 2.21c9.06 0 14.01-7.5 14.01-14.01 0-.21 0-.42-.02-.64a10 10 0 0 0 2.46-2.55Z"/></svg>',
+  // X links by kind, drawn for Nought: an account (a blue person; the grey person is holders), a community (two people); a tweet is the quill below
+  xProfile: '<svg class="xacct-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.8"/><path d="M4.6 20.4c.9-3.9 3.8-6.1 7.4-6.1s6.5 2.2 7.4 6.1"/></svg>',
+  xCommunity: '<svg class="xacct-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2"/><path d="M2.8 19.6c.8-3.2 3.2-5 6.2-5s5.4 1.8 6.2 5"/><path d="M15.4 5.5a3.2 3.2 0 0 1 0 6.1M17.6 14.9c1.9.6 3.2 2.2 3.7 4.7"/></svg>',
+  // a linked tweet (a post, not a profile): a simple quill, drawn for Nought
+  tweet: '<svg class="tweet-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 4C11 4.6 6.8 10.5 5 20"/><path d="M20 4c-.4 7.6-5.6 11.6-12.6 12"/></svg>',
   copy: '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
   x: '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.2L2 3h6.33l4.37 5.77L17.75 3Zm-1.08 16.2h1.7L7.4 4.73H5.58L16.67 19.2Z"/></svg>',
   tg: '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M21.9 4.3 18.7 19.6c-.2 1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.3-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.3l-4.8-1.5c-1-.3-1-1 .2-1.5L20.6 3c.9-.3 1.6.2 1.3 1.3Z"/></svg>',

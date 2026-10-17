@@ -87,33 +87,72 @@ async function chunked([keys, cfg], tries, opts) {
 }
 
 // ---- sending (for transactions Nought builds and signs itself, e.g. local wallets) ----
-// sendRaw(base64 signed transaction) → signature. Preflight on, the RPC rebroadcasts up to 3 times. Sending the same
-// signed transaction to a second host is safe: it has one signature and can only land once. Contract C4:
+// sendRaw(base64 signed transaction) → signature, as fast as Nought can get it to a leader:
+//   - every healthy RPC AND Jito's block engines get it AT ONCE (a signed transaction has one signature and can only
+//     land once, so extra copies cost nothing);
+//   - skipPreflight: the only caller (wallet.js, local wallets) has already simulated it in txcheck.js and held it to
+//     what the trade may spend, so a second simulation on the RPC would only add a round trip;
+//   - after the first host takes it, it is sent again every REBROADCAST_MS until a status shows it landed or failed,
+//     or REBROADCAST_FOR passes (a validator that dropped it gets another copy).
+// Contract C4 is unchanged:
 //   - "already processed" from any host means an earlier attempt landed: success, return the signature;
-//   - "Blockhash not found" is a lagging node: ask the next host;
-//   - once an attempt may have reached a host (timeout, dropped connection, 5xx), any later failure throws with
+//   - "Blockhash not found" is a lagging node: the other hosts decide;
+//   - once an attempt may have reached a host (timeout, dropped connection, 5xx), a total failure throws with
 //     err.maybeSent = true and err.sig: the caller confirms the signature instead of reporting a failure, and never
-//     retries or refunds it. A plain error (e.g. preflight said it would fail) means nothing was sent.
+//     retries or refunds it. A plain error (every host refused it) means nothing was sent.
 const ALREADY = /already (been )?processed|AlreadyProcessed|duplicate signature/i;
 const sigOf = (b64) => { const b = Uint8Array.from(atob(b64.slice(0, 92)), (c) => c.charCodeAt(0)); return b[0] > 0 ? b58encode(b.subarray(1, 65)) : ''; };
 const maybeSent = (e, sig) => Object.assign(e instanceof Error ? e : new Error(String(e)), { sig, maybeSent: true });
+export const JITO = ['https://mainnet.block-engine.jito.wtf/api/v1/transactions', 'https://ny.mainnet.block-engine.jito.wtf/api/v1/transactions', 'https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/transactions'];
+const REBROADCAST_MS = 2000, REBROADCAST_FOR = 20000;
+// one copy to a Jito block engine: {ok} | {error, ambiguous}
+async function jitoSend(url, b64) {
+  let r;
+  try { r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'sendTransaction', params: [b64, { encoding: 'base64' }] }), signal: AbortSignal.timeout(8000) }); }
+  catch { return { error: new Error('Jito did not answer'), ambiguous: true }; }
+  let j = null; try { j = await r.json(); } catch { /* not JSON */ }
+  if (r.ok && j?.result) return { ok: true };
+  const msg = String(j?.error?.message || r.status);
+  if (ALREADY.test(msg)) return { ok: true };
+  return { error: new Error(msg), ambiguous: r.status >= 500 };
+}
+function sendEverywhere(b64) {
+  const params = [b64, { encoding: 'base64', skipPreflight: true, maxRetries: 5 }];
+  const rpcs = ready('sendTransaction').filter((u) => (coolUntil.get(u) || 0) <= Date.now());
+  return [
+    ...rpcs.map((url) => post(url, 'sendTransaction', params, 15000).then((r) => {
+      if (!r.error) return { ok: true };
+      const said = `${r.error.message} ${JSON.stringify(r.error.data?.err ?? '')}`;
+      return ALREADY.test(said) ? { ok: true } : { error: r.error, ambiguous: !!r.ambiguous, provider: !!r.provider };
+    })),
+    ...JITO.map((url) => jitoSend(url, b64)),
+  ];
+}
+function rebroadcast(b64, sig) {
+  const until = Date.now() + REBROADCAST_FOR;
+  const tick = async () => {
+    if (Date.now() > until) return;
+    try { const st = await signatureStatus(sig); if (st && (st.err || st.confirmationStatus)) return; } catch { /* keep sending */ }
+    sendEverywhere(b64).forEach((p) => p.catch(() => {}));
+    setTimeout(tick, REBROADCAST_MS);
+  };
+  setTimeout(tick, REBROADCAST_MS);
+}
 export async function sendRaw(base64Tx) {
-  const sig = sigOf(base64Tx), params = [base64Tx, { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3 }];
+  const sig = sigOf(base64Tx);
   let maybe = false, last = new Error('No RPC accepted the transaction.');
   for (let pass = 0; pass < 2; pass++) {
-    const list = ready('sendTransaction'), open = list.filter((u) => (coolUntil.get(u) || 0) <= Date.now());
-    if (!open.length) { if (list.length) await waitCool(list); continue; }
-    for (const url of open) {
-      const r = await post(url, 'sendTransaction', params, 20000);
-      if (!r.error) return typeof r.result === 'string' && r.result ? r.result : sig;
-      const said = `${r.error.message} ${JSON.stringify(r.error.data?.err ?? '')}`;
-      if (ALREADY.test(said)) return sig;
-      last = r.error;
-      if (r.provider) { maybe ||= !!r.ambiguous; continue; }
-      if (/blockhash not found/i.test(said)) continue;
-      throw maybe ? maybeSent(r.error, sig) : r.error;
-    }
-    if (pass === 0) await sleep(600);
+    const attempts = sendEverywhere(base64Tx);
+    // the first host that takes it wins; the rest keep going in the background
+    const first = await new Promise((resolve) => {
+      let left = attempts.length;
+      for (const p of attempts) p.then((r) => {
+        if (r.ok) resolve(true);
+        else { maybe ||= !!r.ambiguous; if (!r.provider && !/blockhash not found|jito/i.test(r.error?.message || '')) last = r.error; if (--left === 0) resolve(false); }
+      }, () => { maybe = true; if (--left === 0) resolve(false); });
+    });
+    if (first) { rebroadcast(base64Tx, sig); return sig; }
+    if (pass === 0) await sleep(400);
   }
   throw maybe ? maybeSent(last, sig) : last;
 }

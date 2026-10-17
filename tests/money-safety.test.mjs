@@ -33,3 +33,22 @@ test('an unsaved armed order is rejected before it is presented as armed', async
 test('a failed firing-state save prevents all trade submission', async()=>{
  const h=await ordersHarness();await h.api.armed.add({kind:'migrate-buy',mint:coin,sol:.1,owner});h.api.startOrderEngine();h.setFail();h.events.get('migrate')({mint:coin});await new Promise(r=>setTimeout(r,10));assert.equal(h.signed(),0);
 });
+
+// Program allowlist (txcheck PROGRAMS): what a local wallet's transaction may call at the top level, by purpose.
+const JUP6 = 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', TRIGGER = 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X', EVIL = 'Evi1Program1111111111111111111111111111111';
+const calling = (pid) => ({ staticAccountKeys: [owner, tokenAccount, SYS, pid], compiledInstructions: [{ programIdIndex: 3, accountKeyIndexes: [0, 1], data: new Uint8Array() }], addressTableLookups: [] });
+const resultFor = () => { const v = result(); v.preBalances.push(1); v.postBalances.push(1); return v; };
+test('swaps may go through Jupiter\'s aggregator', () => assert.equal(api.judge(calling(JUP6), resultFor(), owner, expect), true));
+test('a swap through an unknown program is refused before signing', () => assert.throws(() => api.judge(calling(EVIL), resultFor(), owner, expect), /calls a program Nought doesn't trade through/));
+test('each purpose has its own allowlist', () => {
+  assert.throws(() => api.judge(calling(TRIGGER), resultFor(), owner, expect), /Jupiter Trigger/);
+  assert.throws(() => api.judge(calling(JUP6), resultFor(), owner, { purpose: 'transfer', spendMint: 'SOL', maxSpendRaw: '200' }), /doesn't send through \(Jupiter's aggregator\)/);
+  const lim = resultFor(); lim.postTokenBalances = [token(0)];
+  assert.equal(api.judge(calling(TRIGGER), lim, owner, { purpose: 'limit-create', spendMint: 'SOL', maxSpendRaw: '200' }), true);
+});
+test('Ultra\'s unwrapLamports back into the wallet is allowed; into someone else\'s is refused', () => {
+  const ok = resultFor(); ok.innerInstructions = [{ index: 0, instructions: [{ programId: TOKEN, parsed: { type: 'unwrapLamports', info: { source: tokenAccount, destination: owner, authority: owner } } }] }];
+  assert.equal(api.judge(calling(JUP6), ok, owner, expect), true);
+  const bad = resultFor(); bad.innerInstructions = [{ index: 0, instructions: [{ programId: TOKEN, parsed: { type: 'unwrapLamports', info: { source: tokenAccount, destination: coin, authority: owner } } }] }];
+  assert.throws(() => api.judge(calling(JUP6), bad, owner, expect), /unwrap your SOL into another wallet/);
+});

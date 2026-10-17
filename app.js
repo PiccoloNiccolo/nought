@@ -7,7 +7,7 @@
 // Every module loads on its own and every step is guarded, so one broken page or one damaged stored value can't blank
 // the whole app. If the router or the Settings page itself can't start, a bare rescue panel offers a backup and a reset
 // of Nought's saved settings (local wallet keys live in IndexedDB and are never touched by it).
-const PAGES = ['landing', 'pulse', 'token', 'discover', 'portfolio', 'track', 'watch', 'upkeep', 'perps', 'yield', 'settings'];
+const PAGES = ['landing', 'pulse', 'token', 'portfolio', 'track', 'watch', 'upkeep', 'perps', 'yield', 'settings'];
 const failed = [];
 const load = (path) => import(path).catch((e) => { failed.push(path); console.error(`Nought: ${path} did not load`, e); return null; });
 const run = (name, fn) => { try { fn(); return true; } catch (e) { console.error(`Nought: ${name} did not start`, e); return false; } };
@@ -19,6 +19,10 @@ const pages = await Promise.all(PAGES.map((p) => load(`./src/pages/${p}.js`)));
 if (shell) run('the frame', () => shell.initShell());
 const socialHover = await load('./src/ui/x-hover.js');
 if (socialHover) run('social previews', () => socialHover.initXHover());
+const imgZoom = await load('./src/ui/img-zoom.js');
+if (imgZoom) run('picture zoom', () => imgZoom.initImgZoom());
+const trackPanel = await load('./src/ui/trackpanel.js');
+if (trackPanel) run('the Trackers panel', () => trackPanel.initTrackPanel());
 const routed = !!router && run('the router', () => router.start());
 if (stream) run('the launch stream', () => stream.connect());
 // Prices and the board are independent. A slow price provider must never hold up discovery.

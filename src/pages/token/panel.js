@@ -5,15 +5,17 @@
 //           (limit.build → summary → limit.submit), and this coin's open orders with Cancel.
 //   Adv.    take-profit / stop-loss legs and buy / sell on migration (orders.js armed.*): they run in this browser
 //           while a Nought tab is open.
-// Below: the position row (bought, sold, holding, PnL). mountPanel(el, ctx) → cleanup.
+// Below: the position row (bought, sold, holding, PnL) and the preset tabs. mountPanel(el, ctx) → cleanup.
 // Nought adds no fee anywhere here: quotes and trades go through core trade.js / orders.js, which never pass one.
 // Money safety: amounts go through core parseAmount ("0,5" = 0.5, anything unclear is refused) and targets through
 // parseTarget; a market trade only runs from a fresh quote on screen and carries its minimum (minOutRaw) and an impact
 // cap; armed orders are set up once per selected wallet.
 import { esc, LS, usd, num, short, toast, ICON, parseAmount, parseTarget } from '../../core/util.js';
 import { settings, set as setSettings, preset, PRIO } from '../../core/settings.js';
-import { wallet, needWallet, tradeOwners } from '../../core/wallet.js';
-import { SOL_MINT, quoteFor, quoteDetails, impactWarning, holding, decimalsOf, DANGER_IMPACT } from '../../core/trade.js';
+import { wallet, needWallet, tradeOwners, selectWallet, MAX_SELECTED } from '../../core/wallet.js';
+import { rpc } from '../../core/rpc.js';
+import * as V from '../../core/vault.js';
+import { SOL_MINT, quoteFor, quoteDetails, impactWarning, holding, decimalsOf, DANGER_IMPACT, multiMode, perWalletSol } from '../../core/trade.js';
 import { limit, armed, NEEDS_TAB, MIN_LIMIT_USD } from '../../core/orders.js';
 import { ju } from '../../core/jup.js';
 import { mcUsd } from '../../core/store.js';
@@ -28,11 +30,26 @@ const feeSol = (v) => (v == null ? '' : v === 0 ? '0' : v < 0.0001 ? v.toFixed(6
 const signed = (v, s) => (v == null || !isFinite(v) ? '—' : (v > 0 ? '+' : '') + s);
 const QUOTE_TTL = 20000; // a quote older than this is not "on screen": the button gets a fresh one first
 const KIND_SHORT = { tp: 'TP', sl: 'SL', 'migrate-buy': 'Buy · mig.', 'migrate-sell': 'Sell · mig.' };
+// small line glyphs for the panel (drawn for Nought)
+const svg = (d, w = 13, extra = '') => `<svg viewBox="0 0 24 24" width="${w}" height="${w}" aria-hidden="true"${extra}>${d}</svg>`;
+const G = {
+  sol: svg('<path d="M7 5.5h13l-3 3H4zM4 10.5h13l3 3H7zM7 15.5h13l-3 3H4z" fill="currentColor"/>', 14, ' class="tp-solic"'),
+  wallet: svg('<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H18v3M4 7.5V17a2 2 0 0 0 2 2h13a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1H6.5A2.5 2.5 0 0 1 4 7.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="16" cy="13.5" r="1.3" fill="currentColor"/>'),
+  slip: svg('<path d="M4 18h16M6 14l4-4 3 3 5-6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>', 12),
+  gas: svg('<path d="M5 20V5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v15M4 20h11M5 10h9M14 8l3 2v6.5a1.5 1.5 0 0 0 3 0V9l-2-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>', 12),
+  shield: svg('<path d="M12 3 5 6v5.5c0 4.2 3 7.8 7 9.5 4-1.7 7-5.3 7-9.5V6l-7-3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>', 12),
+  gear: svg('<circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>', 14),
+  pen: svg('<path d="M4 20h4L19 9l-4-4L4 16v4ZM13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>', 13),
+  check: svg('<path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>', 13),
+};
+// a preset's tab label: the default names P1–P3 read as "Preset 1"–"Preset 3"; a renamed preset keeps its name
+const preLabel = (p) => (/^P\d$/.test(p.name) ? `Preset ${p.name.slice(1)}` : p.name);
 
 export function mountPanel(el, ctx) {
   const mint = ctx.mint;
   const chips = () => { const c = LS.get('tp.chips', CHIPS); return { buy: (c.buy || CHIPS.buy).slice(0, 4), sell: (c.sell || CHIPS.sell).slice(0, 4) }; };
   const P = {
+    qOpen: LS.get('panel.quote.open', false) === true, // the quote's full breakdown (one line when closed)
     side: LS.get('tp.side', 'buy') === 'sell' ? 'sell' : 'buy',
     mode: ['market', 'limit', 'adv'].includes(LS.get('tp.mode', 'market')) ? LS.get('tp.mode', 'market') : 'market',
     amt: { buy: String(preset().buy), sell: String(preset().sellPct) }, editChips: false,
@@ -54,42 +71,97 @@ export function mountPanel(el, ctx) {
   const dec = () => t().decimals ?? P.bal?.tok?.dec ?? decimalsOf(mint);
 
   // ---------- rendering ----------
+  // layout (top to bottom): Buy / Sell, Market / Limit / Adv. with the wallet chip, the mode's body, the position row,
+  // then the preset tabs
   function render() {
-    const buy = P.side === 'buy';
+    const buy = P.side === 'buy', n = owners().length;
     el.innerHTML = `<div class="tp-tp ${P.side}">
       <div class="tp-bs" role="tablist" aria-label="Side"><button type="button" role="tab" data-side="buy" class="${buy ? 'on' : ''}" aria-selected="${buy}">Buy</button><button type="button" role="tab" data-side="sell" class="${buy ? '' : 'on'}" aria-selected="${!buy}">Sell</button></div>
       <div class="tp-modes">
         <div class="tp-mtabs" role="tablist" aria-label="Order type">${[['market', 'Market'], ['limit', 'Limit'], ['adv', 'Adv.']].map(([k, l]) => `<button type="button" role="tab" data-mode="${k}" class="${P.mode === k ? 'on' : ''}" aria-selected="${P.mode === k}">${l}</button>`).join('')}</div>
-        <div class="tp-pre" role="group" aria-label="Preset">${settings.presets.map((p, i) => `<button type="button" data-pre="${i}" class="${i === settings.preset ? 'on' : ''}" title="${esc(p.name)}: buy ${esc(String(p.buy))} SOL · ${esc(String(p.slippage))}% slippage · ${esc(PRIO[p.prio]?.label || '')}${p.mev === 'protected' ? ' · MEV-protected' : ''}">${esc(p.name)}</button>`).join('')}</div>
+        ${P.mode === 'adv' ? `<span class="tp-wal" title="${n ? `${n} wallet${n === 1 ? '' : 's'} selected` : 'No wallet connected'}">${G.wallet}${n ? `<em>${n}</em>` : ''}<span class="tp-bal" data-bal>${balText()}</span></span>`
+          : `<button type="button" class="tp-wal" data-act="wallets" aria-haspopup="dialog" aria-expanded="${!!P.wpop}" title="${!n ? 'Connect a wallet' : 'Pick the wallets this trade runs on'}">${G.wallet}${n ? `<em>${n}</em>` : ''}<span class="tp-bal" data-bal>${balText()}</span></button>`}
       </div>
+      ${P.wpop ? wpopHtml() : ''}
       <div class="tp-body">${P.mode === 'market' ? marketHtml() : P.mode === 'limit' ? limitHtml() : advHtml()}</div>
       <div class="tp-posrow" data-pos>${posHtml()}</div>
+      <div class="tp-pre" role="group" aria-label="Preset">${settings.presets.map((p, i) => `<button type="button" data-pre="${i}" class="${i === settings.preset ? 'on' : ''}" aria-pressed="${i === settings.preset}" title="${esc(p.name)}: buy ${esc(String(p.buy))} SOL · sell ${esc(String(p.sellPct))}% · ${esc(String(p.slippage))}% slippage · ${esc(PRIO[p.prio]?.label || '')} priority${p.mev === 'protected' ? ' · MEV-protected' : ''}">${esc(preLabel(p))}</button>`).join('')}<button type="button" class="tp-pgear" data-act="settings" title="Edit presets" aria-label="Edit presets">${G.gear}</button></div>
     </div>`;
+    if (P.wpop) placeWpop();
     if (P.mode === 'market') requote(0);
     if (P.mode === 'limit') loadOrders();
   }
+  // the picker floats over the page right under the wallet button (above it when the button sits low), so the
+  // panel's own scrolling can never hide it
+  function placeWpop() {
+    const pop = el.querySelector('.tp-wpop'), btn = el.querySelector('[data-act="wallets"]'); if (!pop || !btn) return;
+    const r = btn.getBoundingClientRect(), w = Math.min(340, innerWidth - 16), below = innerHeight - r.bottom - 14, above = r.top - 14;
+    pop.style.width = w + 'px'; pop.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + 'px';
+    if (below >= 320 || below >= above) { pop.style.maxHeight = below + 'px'; pop.style.top = r.bottom + 6 + 'px'; }
+    else { pop.style.maxHeight = above + 'px'; pop.style.top = Math.max(8, r.top - 6 - pop.offsetHeight) + 'px'; }
+  }
+  // ---------- wallet picker on the balance chip: which wallets this trade runs on (Axiom-style) ----------
+  async function loadWpop() {
+    try {
+      const list = await V.list(); P.wlist = list;
+      const addrs = list.map((w) => w.address), bal = new Map();
+      for (let i = 0; i < addrs.length; i += 10) {
+        const r = await rpc('getMultipleAccounts', [addrs.slice(i, i + 10), { encoding: 'base64', dataSlice: { offset: 0, length: 0 }, commitment: 'confirmed' }]);
+        (r?.value || []).forEach((v, j) => bal.set(addrs[i + j], (v?.lamports || 0) / 1e9));
+      }
+      P.wbal = bal;
+      if (P.wpop) render();
+      // how much of this coin each wallet holds (Jupiter balances, low priority, one call per wallet)
+      const tok = new Map();
+      await Promise.all(addrs.slice(0, 25).map(async (a) => { try { const b = await ju.balances(a, { prio: 'low' }); tok.set(a, Number(b.tokens?.[mint]?.ui) || 0); } catch { /* unknown */ } }));
+      P.wtok = tok;
+    } catch { /* balances are optional */ }
+    if (P.wpop) render();
+  }
+  function wpopHtml() {
+    const list = P.wlist || [], sel = new Set(wallet.selected), ext = wallet.kind === 'external' && wallet.owner;
+    const bal = (a) => (P.wbal?.has(a) ? `${fmtSol(P.wbal.get(a))} SOL` : '…');
+    const tok = (a) => (P.wtok?.has(a) ? (P.wtok.get(a) > 0 ? num(P.wtok.get(a)) : '0') : '…');
+    const rows = list.map((w) => `<label class="tp-wp-row${sel.has(w.address) ? ' on' : ''}"><input type="checkbox" data-wpick="${esc(w.address)}" ${sel.has(w.address) ? 'checked' : ''}><span class="nm"><b>${esc(w.name || short(w.address))}${w.address === wallet.owner ? ' <i>active</i>' : ''}</b><span class="ad">${esc(short(w.address))}<button type="button" class="tp-wp-cp" data-copy="${esc(w.address)}" title="Copy address" aria-label="Copy address">${ICON.copy}</button></span></span><span class="bl" title="SOL">${bal(w.address)}</span><span class="tk" title="${esc(sym())} held">${tok(w.address)}</span></label>`).join('');
+    return `<div class="tp-wpop" role="dialog" aria-label="Wallets for this trade">
+      <div class="tp-wp-h"><b>Trade with</b><span>${sel.size ? `${sel.size} of ${list.length} picked` : 'the active wallet only'}</span>${list.length ? '<button type="button" data-act="wp-all">Select all</button><button type="button" data-act="wp-funded">Select all with balance</button><button type="button" data-act="wp-none">None</button>' : ''}</div>
+      ${ext ? `<p class="tp-wp-note">${esc(wallet.name || 'Your extension')} signs its own trades. Multi-wallet trades use wallets kept in Nought${list.length ? ': tick them below.' : '.'}</p>` : ''}
+      ${list.length ? `<div class="tp-wp-list">${rows}</div>` : '<p class="tp-wp-note">No wallets kept in Nought yet.</p>'}
+      <div class="tp-wp-f"><button type="button" data-act="max">Use max balance</button><button type="button" data-act="wp-new">+ Add wallets</button><button type="button" data-act="wp-manage">Manage</button></div>
+    </div>`;
+  }
   const balText = () => {
     if (!owners().length) return 'No wallet';
-    if (!P.bal) return 'Balance …';
+    if (!P.bal) return '…';
     if (P.side === 'buy') return `${fmtSol(P.bal.sol)} SOL`;
     return P.bal.tok ? `${num(P.bal.tok.ui)} ${esc(sym())}` : '—';
   };
+  // the quick amounts: one row of equal cells under the amount box, the last one edits them
   const chipsHtml = (kind, list) => (P.editChips
-    ? list.map((v, i) => `<input class="tp-chipin mono" data-chip="${i}" inputmode="decimal" value="${esc(String(v))}" aria-label="Chip ${i + 1}">`).join('')
-    : list.map((v) => `<button type="button" class="tp-chip" data-amt="${esc(String(v))}">${esc(String(v))}${kind === 'sell' ? '%' : ''}</button>`).join(''))
-    + `<button type="button" class="tp-edit${P.editChips ? ' on' : ''}" data-act="chips" title="${P.editChips ? 'Done' : 'Edit these amounts'}" aria-label="Edit amounts">${P.editChips ? '✓' : '✎'}</button>`;
-  const presetLine = () => { const p = preset(); return `<div class="tp-pline"><span>${esc(p.name)} · ${p.mev === 'protected' ? 'Jupiter Ultra (MEV-protected)' : `${esc(String(p.slippage))}% slippage · ${esc(PRIO[p.prio]?.label || '')} priority`}</span><button type="button" class="tp-link" data-act="settings">Edit presets</button></div>`; };
+    ? list.map((v, i) => `<input class="tp-chipin mono" data-chip="${i}" inputmode="decimal" value="${esc(String(v))}" aria-label="Quick amount ${i + 1}${kind === 'sell' ? ' (percent)' : ' (SOL)'}">`).join('')
+    : list.map((v) => `<button type="button" class="tp-chip" data-amt="${esc(String(v))}" title="${kind === 'sell' ? `Sell ${esc(String(v))}%` : `${esc(String(v))} SOL`}">${esc(String(v))}${kind === 'sell' ? '%' : ''}</button>`).join(''))
+    + `<button type="button" class="tp-edit${P.editChips ? ' on' : ''}" data-act="chips" title="${P.editChips ? 'Done' : 'Edit these amounts'}" aria-label="${P.editChips ? 'Done editing amounts' : 'Edit amounts'}">${P.editChips ? G.check : G.pen}</button>`;
+  // the active preset in one line (slippage, priority, MEV mode); a click opens the preset editor
+  const presetLine = () => {
+    const p = preset(), pr = PRIO[p.prio], prot = p.mev === 'protected';
+    const tip = `${p.name}: ${prot ? 'Jupiter Ultra (MEV-protected): Jupiter sets slippage and fees' : `${p.slippage}% slippage · ${pr?.label || ''} priority (up to ${pr?.max ?? '?'} SOL) · MEV protection off`}. Click to edit presets.`;
+    return `<button type="button" class="tp-pline" data-act="settings" title="${esc(tip)}">${prot
+      ? `<span>${G.shield}MEV-protected</span><i></i><span>Jupiter Ultra</span>`
+      : `<span title="Slippage">${G.slip}${esc(String(p.slippage))}%</span><i></i><span title="Priority fee">${G.gas}${esc(pr?.label || '')}</span><i></i><span title="MEV protection">${G.shield}Off</span>`}<b>${esc(p.name)}</b></button>`;
+  };
+  // the amount box: a filled well with its label inside and the unit at the right, the quick row attached below
+  const amtBox = (key, label, value, unit, aria, chipsRow = '', ph = '', size = '') => `<div class="tp-amtbox${size ? ' ' + size : ''}">
+      <label class="tp-amt"><span class="tp-alb">${label}</span><input data-in="${key}" inputmode="decimal" autocomplete="off" spellcheck="false"${ph ? ` placeholder="${esc(ph)}"` : ''} value="${esc(value)}" aria-label="${esc(aria)}"><em>${unit}</em></label>
+      ${chipsRow ? `<div class="tp-chips">${chipsRow}</div>` : ''}</div>`;
 
   function marketHtml() {
     const buy = P.side === 'buy', n = owners().length;
     return `
-      <div class="tp-lbl"><span>${buy ? 'Amount' : 'Share of your holding'}</span><button type="button" class="tp-bal mono" data-act="max" data-bal title="${buy ? 'Use your SOL balance (keeps 0.01 for fees)' : 'Sell all'}">${balText()}</button></div>
-      <div class="tp-amt"><input data-in="amt" inputmode="decimal" autocomplete="off" spellcheck="false" value="${esc(P.amt[P.side])}" aria-label="${buy ? 'SOL to spend' : 'Percent to sell'}"><em>${buy ? 'SOL' : '%'}</em></div>
-      <div class="tp-chips">${chipsHtml(P.side, chips()[P.side])}</div>
+      ${amtBox('amt', 'Amount', P.amt[P.side], buy ? G.sol : '%', buy ? 'SOL to spend' : 'Percent to sell', chipsHtml(P.side, chips()[P.side]), '0.0')}
       ${presetLine()}
-      ${n > 1 ? `<div class="tp-split">${buy ? `Split evenly over ${n} wallets.` : `Each of ${n} wallets sells this share of its own balance.`} The quote is for one wallet.</div>` : ''}
-      <div class="tp-q" data-q>${quoteHtml()}</div>
+      ${n > 1 ? `<div class="tp-split">${buy ? (multiMode() === 'split' ? `Split evenly over ${n} wallets, all at once.` : `Each of ${n} wallets buys this amount at once (${+(parseAmount(String(P.amt.buy ?? '')) * n || 0).toFixed(4)} SOL in total).`) : `Each of ${n} wallets sells this share of its own balance, all at once.`} The quote is for one wallet.</div>` : ''}
       <button type="button" class="tp-go ${P.side}" data-act="go" data-go>${goText()}</button>
+      <div class="tp-q" data-q>${quoteHtml()}</div>
       <div class="tp-dest" data-dest>${destText()}</div>`;
   }
   function quoteHtml() {
@@ -101,7 +173,12 @@ export function mountPanel(el, ctx) {
     const buy = P.side === 'buy', w = impactWarning(d, liq());
     const out = buy ? `${num(d.outUi)} ${esc(sym())}` : `${fmtSol(d.outUi, 4)} SOL`, min = buy ? `${num(d.minOutUi)} ${esc(sym())}` : `${fmtSol(d.minOutUi, 4)} SOL`;
     const fees = d.fees.map((f) => `<div><span>${esc(f.label)}${f.note ? `<i>${esc(f.note)}</i>` : ''}</span><b>${f.sol != null ? (f.who === 'priority' && d.mode === 'standard' ? '≤ ' : '') + feeSol(f.sol) + ' SOL' : f.bps != null ? (f.bps / 100).toFixed(2) + '%' : f.who === 'pool' ? 'in price' : '—'}</b></div>`).join('');
-    return `${P.qNote ? `<div class="tp-qnote" role="status">${esc(P.qNote)}</div>` : ''}<div class="tp-qrows${P.qBusy ? ' busy' : ''}">
+    const impact = `${d.impactPct < 0.01 ? '<0.01' : d.impactPct.toFixed(2)}%`, impCls = d.impactPct >= DANGER_IMPACT ? 'down' : d.impactPct >= 5 ? 'warn' : '';
+    // one line by default (what you get, impact, Nought's 0% fee); the breakdown with every fee is one click away.
+    // A price-impact or liquidity warning always shows, open or not.
+    const line = `<button type="button" class="tp-qline${P.qBusy ? ' busy' : ''}" data-act="qtoggle" aria-expanded="${P.qOpen}" title="${P.qOpen ? 'Hide' : 'Show'} the full quote: minimum received, route, slippage and every fee"><span class="out">≈ ${out}</span><span class="${impCls}">${impact} impact</span><span class="up">0% fee</span><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="${P.qOpen ? 'm6 15 6-6 6 6' : 'm6 9 6 6 6-6'}" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+    if (!P.qOpen) return `${P.qNote ? `<div class="tp-qnote" role="status">${esc(P.qNote)}</div>` : ''}${line}${w ? `<div class="tp-warn ${w.level}">${esc(w.text)}</div>` : ''}`;
+    return `${P.qNote ? `<div class="tp-qnote" role="status">${esc(P.qNote)}</div>` : ''}${line}<div class="tp-qrows${P.qBusy ? ' busy' : ''}">
         <div class="tp-qout"><span>You get about</span><b>${out}</b></div>
         ${d.usdValue ? `<div><span>Value</span><b>${usd(d.usdValue, 2)}</b></div>` : ''}
         <div><span>Minimum received</span><b>${min}</b></div>
@@ -117,7 +194,9 @@ export function mountPanel(el, ctx) {
     if (P.busy) return 'Waiting for your wallet…';
     const v = parseAmount(P.amt[P.side]);
     if (P.confirmUntil > Date.now()) return `Impact ${P.qd?.impactPct.toFixed(1)}%. Tap again to confirm`;
-    return P.side === 'buy' ? `Buy ${v > 0 ? esc(String(v)) + ' SOL of ' : ''}${esc(sym())}` : `Sell ${v > 0 ? esc(String(Math.min(100, v))) + '% of ' : ''}${esc(sym())}`;
+    // "Buy DOTS" with the amount in a lighter weight after it
+    const name = esc(t().symbol || short(mint));
+    return P.side === 'buy' ? `Buy ${name}${v > 0 ? `<small>${esc(String(v))} SOL</small>` : ''}` : `Sell ${name}${v > 0 ? `<small>${esc(String(Math.min(100, v)))}%</small>` : ''}`;
   }
   function destText() {
     const o = owners();
@@ -132,14 +211,11 @@ export function mountPanel(el, ctx) {
   function limitHtml() {
     const buy = P.side === 'buy', mc = P.tkind === 'mc';
     return `
-      <div class="tp-lbl"><span>${buy ? 'Spend' : 'Share of your holding'}</span><button type="button" class="tp-bal mono" data-act="max" data-bal>${balText()}</button></div>
-      <div class="tp-amt"><input data-in="lamt" inputmode="decimal" autocomplete="off" value="${esc(P.lim.amt[P.side])}" aria-label="${buy ? 'SOL to spend' : 'Percent to sell'}"><em>${buy ? 'SOL' : '%'}</em></div>
+      ${amtBox('lamt', buy ? 'Spend' : 'Sell', P.lim.amt[P.side], buy ? G.sol : '%', buy ? 'SOL to spend' : 'Percent to sell')}
       <div class="tp-lbl"><span>${buy ? 'Buy when' : 'Sell when'} ${mc ? 'market cap' : 'price'} ${buy ? 'drops to' : 'rises to'}</span>${kindSeg()}</div>
-      <div class="tp-amt"><em>$</em><input data-in="target" inputmode="decimal" autocomplete="off" placeholder="${mc ? 'e.g. 25k' : 'e.g. 0.00002'}" value="${esc(P.lim.target)}" aria-label="Target ${mc ? 'market cap' : 'price'} in USD"><em>${mc ? 'MC' : 'USD'}</em></div>
-      <div class="tp-chips">${(buy ? [-10, -25, -50, -75] : [25, 50, 100, 200]).map((p) => `<button type="button" class="tp-chip" data-tgt="${p}" data-for="target">${p > 0 ? '+' : ''}${p}%</button>`).join('')}</div>
+      ${amtBox('target', mc ? 'Mkt cap' : 'Price', P.lim.target, '$', `Target ${mc ? 'market cap' : 'price'} in USD`, (buy ? [-10, -25, -50, -75] : [25, 50, 100, 200]).map((p) => `<button type="button" class="tp-chip" data-tgt="${p}" data-for="target" title="${p > 0 ? '+' : ''}${p}% from now">${p > 0 ? '+' : ''}${p}%</button>`).join(''), mc ? 'e.g. 25k' : 'e.g. 0.00002')}
       <div class="tp-now" data-now>${nowText()}</div>
-      <div class="tp-lbl"><span>Expires</span></div>
-      <div class="tp-seg wide">${EXPIRY.map(([s, l]) => `<button type="button" data-exp="${s}" class="${P.lim.exp === s ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="tp-lbl"><span>Expires</span><div class="tp-seg" role="group" aria-label="Expires">${EXPIRY.map(([s, l]) => `<button type="button" data-exp="${s}" class="${P.lim.exp === s ? 'on' : ''}">${l}</button>`).join('')}</div></div>
       <div data-built>${builtHtml()}</div>
       <div class="tp-ol" data-orders>${ordersHtml()}</div>
       <p class="tp-fine">A limit order is a Jupiter Trigger order: it sits on-chain under your wallet and fills while you are away. Minimum $${MIN_LIMIT_USD}. Buys must sit below the current price, sells above. Jupiter takes its own fee when it fills. Nought takes nothing.</p>`;
@@ -184,15 +260,13 @@ export function mountPanel(el, ctx) {
     const migrated = !!t().migrated, mc = P.tkind === 'mc', n = owners().length;
     return `
       <div class="tp-tabnote">${ICON.bolt}<span>Works while this tab is open. ${esc(NEEDS_TAB.replace(/^Runs only while a Nought tab is open\.\s*/, ''))}</span></div>
-      ${n > 1 ? `<div class="tp-split">Arms one set per selected wallet (${n}): sells in each wallet that holds the coin, a migration buy split evenly.</div>` : ''}
+      ${n > 1 ? `<div class="tp-split">Arms one set per selected wallet (${n}): sells in each wallet that holds the coin; a migration buy ${multiMode() === 'split' ? 'split evenly' : 'of this amount from each wallet'}.</div>` : ''}
       <h4 class="tp-h">Take-profit and stop-loss</h4>
       <div class="tp-lbl"><span>Sell this share when a level hits</span>${kindSeg()}</div>
-      <div class="tp-amt"><input data-in="apct" inputmode="decimal" value="${esc(P.adv.pct)}" aria-label="Percent to sell"><em>%</em></div>
+      ${amtBox('apct', 'Sell', P.adv.pct, '%', 'Percent to sell')}
       <div class="tp-two">
-        <div><div class="tp-lbl"><span class="up">Take profit</span></div><div class="tp-amt sm"><em>$</em><input data-in="tp" inputmode="decimal" placeholder="${mc ? 'MC' : 'price'}" value="${esc(P.adv.tp)}" aria-label="Take-profit ${mc ? 'market cap' : 'price'}"></div>
-          <div class="tp-chips sm">${[50, 100, 200].map((p) => `<button type="button" class="tp-chip" data-tgt="${p}" data-for="tp">+${p}%</button>`).join('')}</div></div>
-        <div><div class="tp-lbl"><span class="down">Stop loss</span></div><div class="tp-amt sm"><em>$</em><input data-in="sl" inputmode="decimal" placeholder="${mc ? 'MC' : 'price'}" value="${esc(P.adv.sl)}" aria-label="Stop-loss ${mc ? 'market cap' : 'price'}"></div>
-          <div class="tp-chips sm">${[-20, -35, -50].map((p) => `<button type="button" class="tp-chip" data-tgt="${p}" data-for="sl">${p}%</button>`).join('')}</div></div>
+        <div><div class="tp-lbl"><span class="up">Take profit</span></div>${amtBox('tp', mc ? 'MC' : 'Price', P.adv.tp, '$', `Take-profit ${mc ? 'market cap' : 'price'}`, [50, 100, 200].map((p) => `<button type="button" class="tp-chip" data-tgt="${p}" data-for="tp">+${p}%</button>`).join(''), '', 'sm')}</div>
+        <div><div class="tp-lbl"><span class="down">Stop loss</span></div>${amtBox('sl', mc ? 'MC' : 'Price', P.adv.sl, '$', `Stop-loss ${mc ? 'market cap' : 'price'}`, [-20, -35, -50].map((p) => `<button type="button" class="tp-chip" data-tgt="${p}" data-for="sl">${p}%</button>`).join(''), '', 'sm')}</div>
       </div>
       <div class="tp-now" data-now>${nowText()}</div>
       <div data-adverr="tpsl">${advErrHtml('tpsl')}</div>
@@ -220,19 +294,21 @@ export function mountPanel(el, ctx) {
   }
 
   // ---------- position ----------
+  // Bought | Sold | Holding | PnL in one row with dividers (SOL amounts); without a wallet or a position read the cells
+  // show a dash and the line under them says why
   function posHtml() {
-    if (!owners().length) return '<div class="tp-ph"><span>Position</span></div><div class="tp-qmsg">Connect a wallet to see what you hold.</div>';
     const p = P.pos, n = owners().length;
-    const head = `<div class="tp-ph"><span>Position${n > 1 ? ` · ${n} wallets` : ''}</span><button type="button" class="tp-link" data-act="instant">${ICON.bolt} Instant trade</button></div>`;
-    if (!p) return head + `<div class="tp-qmsg">${P.posBusy ? 'Reading your position…' : 'Position unavailable right now.'}</div>`;
-    if (!p.buys && !p.sells && !(p.holdUi > 0)) return head + '<div class="tp-qmsg">No position yet.</div>';
-    const c = p.pnlSol > 0 ? 'up' : p.pnlSol < 0 ? 'down' : '';
-    return head + `<div class="tp-pgrid">
-      <div><span>Bought</span><b>${fmtSol(p.boughtSol)}</b><i>${p.buys} buy${p.buys === 1 ? '' : 's'}</i></div>
-      <div><span>Sold</span><b>${fmtSol(p.soldSol)}</b><i>${p.sells} sell${p.sells === 1 ? '' : 's'}</i></div>
-      <div><span>Holding</span><b>${p.holdSol != null ? fmtSol(p.holdSol) : '—'}</b><i>${num(p.holdUi)}${p.holdKnown ? '' : '?'}</i></div>
-      <div><span>PnL</span><b class="${c}">${signed(p.pnlSol, fmtSol(p.pnlSol))}</b><i class="${c}">${p.pnlPct != null ? signed(p.pnlPct, p.pnlPct.toFixed(1) + '%') : p.pnlUsd != null ? usd(p.pnlUsd) : ''}</i></div>
-    </div><div class="tp-punit">Amounts in SOL${p.pnlUsd != null ? ` · PnL ${usd(p.pnlUsd, 2)}` : ''}</div>`;
+    const cell = (label, val, sub = '', c = '') => `<div><span>${label}</span><b class="${c}">${val}</b>${sub ? `<i class="${c === 'up' || c === 'down' ? c : ''}">${sub}</i>` : ''}</div>`;
+    if (!n || !p) return `<div class="tp-pgrid">${['Bought', 'Sold', 'Holding', 'PnL'].map((l) => cell(l, '—', '', 'dim')).join('')}</div><div class="tp-punit">${!n ? 'Connect a wallet to see what you hold.' : P.posBusy ? 'Reading your position…' : 'Position unavailable right now.'}</div>`;
+    const c = p.pnlSol > 0 ? 'up' : p.pnlSol < 0 ? 'down' : '', none = !p.buys && !p.sells && !(p.holdUi > 0);
+    // SOL or dollars (at today's SOL price), flipped with the ⇄ button or by clicking the row
+    const s = solUsd(), inUsd = P.posUsd && s > 0, v = (sol) => (inUsd ? usd(sol * s) : fmtSol(sol));
+    return `<div class="tp-pgrid" data-act="posunit" title="Click to show ${inUsd ? 'SOL' : 'dollars'}">
+      ${cell('Bought', v(p.boughtSol), `${p.buys} buy${p.buys === 1 ? '' : 's'}`, p.boughtSol > 0 ? 'up' : '')}
+      ${cell('Sold', v(p.soldSol), `${p.sells} sell${p.sells === 1 ? '' : 's'}`, p.soldSol > 0 ? 'down' : '')}
+      ${cell('Holding', p.holdSol != null ? v(p.holdSol) : '—', `${num(p.holdUi)}${p.holdKnown ? '' : '?'}`)}
+      ${cell('PnL', signed(p.pnlSol, inUsd ? usd(Math.abs(p.pnlSol) * s) : fmtSol(p.pnlSol)), p.pnlPct != null ? signed(p.pnlPct, p.pnlPct.toFixed(1) + '%') : p.pnlUsd != null ? usd(p.pnlUsd) : '', c)}
+    </div>${p.avgEntryMc || p.avgExitMc ? `<div class="tp-avg">${p.avgEntryMc ? `<span>Avg entry <b class="up">${usd(p.avgEntryMc)}</b> MC</span>` : ''}${p.avgExitMc ? `<span>Avg exit <b class="down">${usd(p.avgExitMc)}</b> MC</span>` : ''}</div>` : ''}<div class="tp-punit">${none ? 'No position yet · ' : ''}${n > 1 ? `${n} wallets · ` : ''}<button type="button" class="tp-link" data-act="posunit" title="Show amounts in ${inUsd ? 'SOL' : 'dollars'}">⇄ ${inUsd ? 'USD' : 'SOL'}</button>${!inUsd && p.pnlUsd != null ? ` · PnL ${usd(p.pnlUsd, 2)}` : ''}${p.buys > 0 ? `<button type="button" class="tp-link" data-act="share" title="Make a PnL card to share">${ICON.share || ''}Share PnL</button>` : ''}<button type="button" class="tp-link" data-act="instant" title="Open the floating Instant trade panel">${ICON.bolt}Instant</button></div>`;
   }
 
   // ---------- partial updates (inputs keep focus) ----------
@@ -265,7 +341,7 @@ export function mountPanel(el, ctx) {
     if (!buy && v > 100) return { err: 'Pick a share from 1 to 100%.' };
     if (buy && v > 100000) return { err: 'That is more SOL than Nought will send in one go.' };
     let raw;
-    if (buy) raw = BigInt(Math.floor((v / Math.max(1, n)) * 1e9));
+    if (buy) raw = BigInt(Math.round(perWalletSol(v, Math.max(1, n)) * 1e9));
     else {
       if (!n) return { err: 'Connect a wallet to quote a sale.', soft: true };
       const tok = P.bal?.tok;
@@ -276,7 +352,7 @@ export function mountPanel(el, ctx) {
     }
     if (raw <= 0n) return { err: 'That amount rounds to zero.', soft: true };
     const p = preset();
-    return { v, raw, key: [P.side, raw, settings.preset, p.slippage, p.mev, p.prio, owners().join(',')].join('|') };
+    return { v, raw, key: [P.side, raw, settings.preset, p.slippage, p.mev, p.prio, owners().join(','), multiMode()].join('|') };
   }
   // the quote on screen still matches the box, the preset and the wallets, and is recent
   const quoteFresh = () => { const a = ask(); return !!(P.qd && P.q && !P.qBusy && a.key && a.key === P.q.key && Date.now() - P.q.at < QUOTE_TTL); };
@@ -312,8 +388,10 @@ export function mountPanel(el, ctx) {
     let h;
     if (b && !fresh) h = e && BigInt(e.raw || 0) > 0n ? { raw: BigInt(e.raw), dec: e.dec ?? dec(), ui: Number(e.ui) || 0, frozen: !!e.frozen } : { raw: 0n, dec: dec(), ui: 0, frozen: false };
     else h = await holding(mint, owner).catch(() => null);
+    // Jupiter busy: read the SOL straight from the chain
+    const sol = b?.sol ?? await rpc('getBalance', [owner, { commitment: 'confirmed' }]).then((r) => r.value / 1e9).catch(() => null);
     if (!P.alive || owners()[0] !== owner) return;
-    P.bal = { sol: b?.sol ?? P.bal?.sol ?? null, tok: h ?? P.bal?.tok ?? null }; P.balOwner = owner;
+    P.bal = { sol: sol ?? P.bal?.sol ?? null, tok: h ?? P.bal?.tok ?? null }; P.balOwner = owner;
     upd();
   }
   async function loadPos(force = false) {
@@ -348,7 +426,12 @@ export function mountPanel(el, ctx) {
     if (!needWallet() || P.busy) return;
     const buy = P.side === 'buy', a = ask();
     if (a.err || a.empty) { P.qErr = a.err || (buy ? 'Enter how much SOL to spend.' : 'Enter a share to sell.'); P.qBad = !a.soft; P.qRetry = false; P.qd = null; upd(); q('[data-in="amt"]')?.focus(); return; }
-    if (!quoteFresh()) { P.qNote = 'Fresh quote below. Check it, then press again to trade.'; P.confirmUntil = 0; requote(0); upd(); return; }
+    // one press trades: a stale quote is refreshed first, and the trade still enforces that quote's minimum and impact cap
+    if (!quoteFresh()) {
+      clearTimeout(P.qTimer); P.busy = true; P.qNote = 'Getting a fresh quote…'; upd();
+      try { await doQuote(); } finally { P.busy = false; P.qNote = ''; }
+      if (!P.alive || !quoteFresh()) { upd(); return; }
+    }
     const d = P.qd, w = impactWarning(d, liq()), now = Date.now();
     // a high-impact trade needs a second, deliberate press (not a double-click or a held Enter)
     if (w?.level === 'danger' && !(P.confirmUntil > now && now - P.confirmAt > 600)) { P.confirmUntil = now + 8000; P.confirmAt = now; upd(); setTimeout(upd, 8100); return; }
@@ -436,10 +519,10 @@ export function mountPanel(el, ctx) {
         const sol = parseAmount(P.adv.mb);
         if (!(sol > 0)) throw new Error(Number.isNaN(sol) ? 'Not a SOL amount. Type it like 0.5 or 0,5.' : 'Enter how much SOL to buy with.');
         if (sol > 100000) throw new Error('That is more SOL than Nought will send in one go.');
-        const list = owners(), each = sol / list.length;
+        const list = owners(), each = perWalletSol(sol, list.length);
         if (!(Math.floor(each * 1e9) > 0)) throw new Error('That amount is too small to split.');
         for (const owner of list) await add({ kind: 'migrate-buy', sol: each, owner });
-        toast(`Armed: buy ${esc(String(sol))} SOL of ${esc(sym())} when it migrates${list.length > 1 ? `, ${esc(String(+each.toFixed(6)))} SOL each from ${esc(walletsText(list))}` : ` from ${esc(walletsText(list))}`}. Keep a Nought tab open.`, 'ok');
+        toast(`Armed: buy ${esc(String(+(each * list.length).toFixed(6)))} SOL of ${esc(sym())} when it migrates${list.length > 1 ? `, ${esc(String(+each.toFixed(6)))} SOL each from ${esc(walletsText(list))}` : ` from ${esc(walletsText(list))}`}. Keep a Nought tab open.`, 'ok');
       } else {
         const pct = parseAmount(P.adv.ms);
         if (!(pct > 0 && pct <= 100)) throw new Error(Number.isNaN(pct) ? 'Not a share. Type a percent like 50.' : 'Pick a share to sell, 1 to 100%.');
@@ -477,6 +560,7 @@ export function mountPanel(el, ctx) {
     switch (d.act) {
       case 'go': goMarket(); break;
       case 'requote': requote(0); break;
+      case 'qtoggle': P.qOpen = !P.qOpen; LS.set('panel.quote.open', P.qOpen); upd(); break;
       case 'chips': P.editChips = !P.editChips; render(); break;
       case 'max': {
         if (!owners().length) { needWallet(); break; }
@@ -496,9 +580,56 @@ export function mountPanel(el, ctx) {
       case 'arm-ms': arm('ms'); break;
       case 'clear-armed': armed.clearFinished(); upd(); break;
       case 'instant': openInstant(mint); break;
+      case 'posunit': P.posUsd = !P.posUsd; LS.set('tp.posUsd', P.posUsd); { const r = q('[data-pos]'); if (r) r.innerHTML = posHtml(); } break;
+      case 'wallets': if (!owners().length && !wallet.owner) { needWallet(); break; } P.wpop = !P.wpop; if (P.wpop) loadWpop(); render(); break;
+      case 'wp-all': (async () => { for (const w of (await V.list()).slice(0, MAX_SELECTED)) if (!wallet.selected.includes(w.address)) selectWallet(w.address, true); })().catch((err) => toast(esc(err.message), 'err')); break;
+      case 'wp-none': for (const a of [...wallet.selected]) selectWallet(a, false); break;
+      case 'wp-funded': {
+        // buying needs SOL; selling needs this coin
+        const has = (a) => (P.side === 'sell' ? (P.wtok?.get(a) || 0) > 0 : (P.wbal?.get(a) || 0) > 0.002);
+        for (const w of P.wlist || []) { const want = has(w.address); if (want !== wallet.selected.includes(w.address)) { try { selectWallet(w.address, want); } catch { /* the 25-wallet cap */ } } }
+        break;
+      }
+      case 'wp-new': case 'wp-manage': P.wpop = false; render(); import('../../ui/wallets.js').then((m) => m.openWalletManager(d.act === 'wp-new' ? 'new' : 'home')).catch(() => {}); break;
+      case 'share': {
+        const p = P.pos; if (!p) break;
+        import('../../ui/pnlcard.js').then((m) => m.openPnlCard({ mint, symbol: t().symbol || '', image: t().image || '', investedSol: p.boughtSol, soldSol: p.soldSol, pnlSol: p.pnlSol, pnlPct: p.pnlPct, pnlUsd: p.pnlUsd, avgEntryMc: p.avgEntryMc, avgExitMc: p.avgExitMc })).catch(() => toast('Could not open the PnL card.', 'err'));
+        break;
+      }
       default:
     }
   });
+  el.addEventListener('change', (e) => {
+    const c = e.target.closest?.('[data-wpick]'); if (!c) return;
+    try { selectWallet(c.dataset.wpick, c.checked); } catch (err) { c.checked = !c.checked; toast(esc(err.message || 'Could not change the wallet selection.'), 'err'); }
+  });
+  const closeWpop = (e) => { if (P.wpop && !e.target.closest?.('.tp-wpop, [data-act="wallets"]')) { P.wpop = false; render(); } };
+  const escWpop = (e) => { if (P.wpop && e.key === 'Escape') { P.wpop = false; render(); } };
+  document.addEventListener('pointerdown', closeWpop, true); document.addEventListener('keydown', escWpop);
+  const followWpop = () => { if (P.wpop) placeWpop(); };
+  addEventListener('scroll', followWpop, true); addEventListener('resize', followWpop);
+  if (!document.getElementById('tp-wpop-css')) {
+    const st = document.createElement('style'); st.id = 'tp-wpop-css';
+    st.textContent = `.tp-modes { position: relative; }
+.tp-wpop { position: absolute; z-index: 30; right: 0; top: calc(100% + 6px); width: min(320px, calc(100vw - 24px)); display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel-2, var(--panel)); box-shadow: var(--shadow-lg, 0 18px 44px rgba(0,0,0,.55)); font-size: 12.5px; }
+.tp-wp-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; } .tp-wp-h span { flex: 1 1 calc(100% - 100px); color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tp-wp-h button, .tp-wp-f button { padding: 5px 9px; border: 1px solid var(--line-2); border-radius: 999px; background: none; color: var(--fg); font: 500 11.5px/1 var(--sans); cursor: pointer; }
+.tp-wp-h button:hover, .tp-wp-f button:hover { border-color: var(--accent); }
+.tp-wp-list { display: grid; gap: 2px; max-height: 240px; overflow-y: auto; }
+.tp-wp-row { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 10px; padding: 8px; border-radius: 7px; cursor: pointer; }
+.tp-wp-row .nm { display: grid; gap: 2px; min-width: 0; } .tp-wp-row .nm b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-wp-row .bl, .tp-wp-row .tk { padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 11.5px; white-space: nowrap; }
+.tp-wp-cp { all: unset; cursor: pointer; display: inline-grid; margin-left: 4px; vertical-align: -2px; color: var(--muted); } .tp-wp-cp svg { width: 11px; height: 11px; }
+.tp-wpop { position: fixed; z-index: 80; right: auto; overflow-y: auto; }
+.tp-wp-row:hover, .tp-wp-row.on { background: var(--fill-1, rgba(255,255,255,.04)); }
+.tp-wp-row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; } .tp-wp-row .nm i { font-style: normal; color: var(--accent); font-size: 11px; }
+.tp-wp-row .ad { color: var(--muted); font-size: 11px; } .tp-wp-row .bl { font-variant-numeric: tabular-nums; }
+.tp-wp-note { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.tp-wp-f { display: flex; flex-wrap: wrap; gap: 6px; }
+.tp-avg { display: flex; justify-content: space-between; gap: 10px; padding: 6px 2px 0; color: var(--muted); font-size: 12px; }
+.tp-avg b { font-weight: 600; font-variant-numeric: tabular-nums; } .tp-avg b.up { color: var(--up); } .tp-avg b.down { color: var(--down); }`;
+    document.head.appendChild(st);
+  }
   el.addEventListener('input', (e) => {
     const i = e.target, k = i.dataset?.in; if (!k) return;
     if (k === 'amt') { P.amt[P.side] = i.value; P.qd = null; P.q = null; P.qNote = ''; P.qBusy = parseAmount(i.value) > 0; upd(); requote(); }
@@ -540,5 +671,5 @@ export function mountPanel(el, ctx) {
   ];
   render(); loadBal(); loadPos(false);
 
-  return () => { P.alive = false; clearTimeout(P.qTimer); clearTimeout(tokT); timers.forEach(clearInterval); };
+  return () => { P.alive = false; clearTimeout(P.qTimer); clearTimeout(tokT); timers.forEach(clearInterval); document.removeEventListener('pointerdown', closeWpop, true); document.removeEventListener('keydown', escWpop); removeEventListener('scroll', followWpop, true); removeEventListener('resize', followWpop); };
 }

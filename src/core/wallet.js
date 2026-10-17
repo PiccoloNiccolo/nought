@@ -72,9 +72,12 @@ on('vault', async () => {
 export function openWalletPicker() {
   const list = $('#wallet-list');
   list.innerHTML = WALLETS.map((w) => `<button value="cancel" data-w="${w.id}">${w.name}<small>${w.get() ? 'Detected' : 'Install'}</small></button>`).join('')
-    + '<button value="cancel" data-local>Local wallet<small>Lives in this browser · one-click trades</small></button>';
+    // import / create: a key kept encrypted in this browser signs trades itself (no extension pop-up per trade)
+    + '<button value="cancel" data-local="import">Import a wallet<small>Paste a private key · one-click trades</small></button>'
+    + '<button value="cancel" data-local="new">Create a wallet<small>New key in this browser · one-click trades</small></button>'
+    + '<button value="cancel" data-local="home">Local wallets<small>Ones already in this browser</small></button>';
   list.querySelectorAll('[data-w]').forEach((b) => b.addEventListener('click', () => connectWallet(b.dataset.w).catch((e) => toast(esc(e.message), 'err'))));
-  list.querySelector('[data-local]').addEventListener('click', () => ui().then((m) => m.openWalletManager()));
+  list.querySelectorAll('[data-local]').forEach((b) => b.addEventListener('click', () => ui().then((m) => m.openWalletManager(b.dataset.local))));
   $('#wallets').showModal();
 }
 // true if a wallet is active; otherwise opens the picker and returns false
@@ -125,9 +128,14 @@ const built = new WeakMap(); // transactions built by transfer()/transferToken()
 async function signLocal(tx, owner, expect) {
   const exp = built.get(tx) || expect;
   if (!exp) throw new Error('Nought did not sign this transaction: it came without a description of what it may spend.');
-  const kp = await localKeypair(owner);
+  await V.whenReady?.();
+  // trades sign with the kept keys; sending SOL or tokens OUT of the wallet always needs the passphrase
+  if (exp.purpose === 'transfer' && !V.hasPassKey?.()) await (await ui()).requestUnlock('Enter your passphrase to send funds out of this wallet.', true);
+  const signer = await localKeypair(owner);
   await checkTx(tx, owner, exp);
-  tx.sign([kp]);
+  // the vault's sealed key signs the message bytes; the key itself never reaches this module
+  const sig = await signer.sign(tx.message.serialize());
+  tx.addSignature(new (window.solanaWeb3.PublicKey)(owner), sig);
 }
 // the Keypair of a local wallet, asking to unlock the vault first when needed
 async function localKeypair(owner) {

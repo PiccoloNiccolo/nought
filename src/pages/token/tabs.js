@@ -9,7 +9,8 @@
 // nothing polls while the browser tab is hidden. Top traders reads at most 150 pages at ≤3 requests a second, stoppable.
 import { esc, isMint, short, usd, num, pct, cls, ago, LS, toast, sleep, on, emit, ICON } from '../../core/util.js';
 import { tokens, mcUsd, all } from '../../core/store.js';
-import { jx, jh, ju } from '../../core/jup.js';
+import { jx, jh, ju, jt } from '../../core/jup.js';
+import { tokenBalance } from '../../core/rpc.js';
 import { wallet, needWallet } from '../../core/wallet.js';
 import * as V from '../../core/vault.js';
 import { solUsd } from '../../core/price.js';
@@ -19,6 +20,7 @@ import { preset, PRIO } from '../../core/settings.js';
 import { sellPct, tradeLog, decimalsOf } from '../../core/trade.js';
 import { limit, armed, NEEDS_TAB } from '../../core/orders.js';
 import { maybeLanded } from '../../ui/instant.js';
+import { loadKols as kolList, kolPic, whoIs, createdBy } from '../../core/kols.js';
 
 // ============================================================================================================
 // shared helpers (audit.js and scan.js import these)
@@ -311,19 +313,25 @@ export function mountTabs(el, ctx) {
     positions: { data: null, err: '', busy: false, lastPoll: 0, confirm: null, selling: false },
     orders: { status: 'active', data: null, err: '', busy: false, confirm: null, cancelling: false, lastPoll: 0 },
     top: { stopped: false, running: false, sort: 'pnl', lastAgg: 0, rows: null, ver: -1 },
-    dev: { busy: false, err: '' },
+    dev: { busy: false, err: '', created: undefined, toks: new Map(), holds: null },
     marked: new Map(), markedSent: false,
   };
   const persist = () => LS.set('tt', { tab: S.tab, minSol: S.trades.minSol, unit: S.trades.unit, hidePool: S.holders.hidePool });
   const all_ = () => hist(mint);
 
+  // one header row: the tabs on the left, the open tab's filters on the right (they wrap under on narrow screens)
   el.innerHTML = `<div class="tt tt-tabs">
-    <div class="tt-bar hfade" role="tablist" aria-label="Coin activity">${TABS.map(([k, l]) => `<button role="tab" data-ttab="${k}" class="${k === S.tab ? 'on' : ''}">${l}<span class="tt-n" data-n="${k}"></span></button>`).join('')}</div>
-    <div class="tt-tool"></div>
+    <div class="tt-head"><div class="tt-bar hfade" role="tablist" aria-label="Coin activity">${TABS.map(([k, l]) => `<button role="tab" data-ttab="${k}" class="${k === S.tab ? 'on' : ''}">${l}<span class="tt-n" data-n="${k}"></span></button>`).join('')}</div>
+    <div class="tt-tool"></div></div>
     <div class="tt-body"></div>
   </div>`;
   const root = el.querySelector('.tt-tabs'), tool = root.querySelector('.tt-tool'), body = root.querySelector('.tt-body');
   const setN = (k, v) => { const n = root.querySelector(`[data-n="${k}"]`); if (n) n.textContent = v ? String(v) : ''; };
+  // "wrap" when the filters sit on a row of their own under the tabs (css/token-tabs.css adds a divider and left-aligns them)
+  const head = root.querySelector('.tt-head'), bar = root.querySelector('.tt-bar');
+  const syncHead = () => head.classList.toggle('wrap', !tool.hidden && tool.offsetTop > bar.offsetTop + 2);
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => requestAnimationFrame(() => S.alive && syncHead())) : null;
+  ro?.observe(head);
 
   loadKols().then(() => S.alive && renderBody());
   refreshVault(true).then(() => S.alive && renderBody());
@@ -373,17 +381,19 @@ export function mountTabs(el, ctx) {
       const mine = myWallets(), dev = tokOf(ctx).dev;
       rowsHtml = shown.map((x) => {
         const mc = x.mc || x.priceUsd * supply, buy = x.side === 'buy';
+        // a faint bar behind the total, on a log scale of the SOL size (10 SOL or more fills the cell)
+        const w = Math.min(100, (Math.log10(1 + Math.max(0, x.sol || 0) * 10) / Math.log10(101)) * 100).toFixed(0);
         return `<tr data-trade-key="${esc(keyOf(x))}" class="${buy ? 'b' : 's'}${mine.has(x.wallet) ? ' me' : ''}${dev && x.wallet === dev ? ' dv' : ''}">
           <td class="age" data-age="${x.at}">${ago(x.at)}</td>
           <td class="${buy ? 'up' : 'down'}">${buy ? 'Buy' : 'Sell'}${x.mev ? '<span class="tt-b mev" title="Jupiter flags this trade as MEV (sandwich or arbitrage)">MEV</span>' : ''}</td>
           <td>${usd(mc)}</td>
           <td>${num(x.tokens)}</td>
-          <td class="${buy ? 'up' : 'down'}">${unit === 'usd' ? usd(x.usd, 2) : fmtSol(x.sol)}</td>
+          <td class="tot ${buy ? 'up' : 'down'}"><span class="tt-tot" style="--w:${w}%">${unit === 'usd' ? usd(x.usd, 2) : fmtSol(x.sol)}</span></td>
           <td class="who"><button class="tt-w" data-scan="${esc(x.wallet)}" title="Scan this trader">${esc(short(x.wallet))}</button>${badges(x.wallet, ctx, x.tags)}<a class="tt-tx" href="${esc(solscanTx(x.sig))}" target="_blank" rel="noopener" title="Open on Solscan" aria-label="Open on Solscan">${EXT}</a><button class="tt-ico" data-fw="${esc(x.wallet)}" title="Only this wallet" aria-label="Only this wallet">${ICON.filter}</button></td></tr>`;
       }).join('');
     }
     return `<div class="tt-scroll" data-scroll="trades"><table class="tt-t tt-trades">
-      <thead><tr><th>Age</th><th>Side</th><th>MC</th><th>Amount</th><th><button class="tt-th" data-unit title="Switch SOL / USD">${unit === 'usd' ? 'USD' : 'SOL'} ⇄</button></th><th>Trader</th></tr></thead>
+      <thead><tr><th>Age</th><th>Type</th><th>MC</th><th>Amount</th><th><button class="tt-th" data-unit title="Switch SOL / USD">Total ${unit === 'usd' ? 'USD' : 'SOL'} ⇄</button></th><th class="who">Trader</th></tr></thead>
       <tbody>${rowsHtml}</tbody></table>
       ${shown.length ? `<div class="tt-foot" data-tfoot>${tradesFoot(hs, shown.length >= rows.length)}</div>` : ''}</div>`;
   }
@@ -407,7 +417,7 @@ export function mountTabs(el, ctx) {
     let n = addTxs(all_(), [x]);
     const th = histIf(mint, d.wallet); if (th && th.next !== undefined) n += addTxs(th, [x]);
     if (n && S.tab === 'trades') renderBodySoon();
-    if (n && S.tab === 'top') { S.top.rows = null; renderBodySoon(); }
+    if (n && (S.tab === 'top' || S.tab === 'holders')) { S.top.rows = null; renderBodySoon(); }
     if (n) pushMarkers();
   }
   // chart markers for tracked wallets' and KOLs' trades (the chart itself draws your fills and the dev's). Sent as one
@@ -568,10 +578,42 @@ export function mountTabs(el, ctx) {
     try { const d = await holdersOf(mint); setN('holders', d.count || ''); } catch { /* the body shows the error */ }
     if (S.alive && S.tab === 'holders') { renderTool(); renderBodySoon(); }
   }
+  // holders the public KOL list or a pump.fun profile names: picture, name and a KOL / pump.fun tag, plus filters
+  // Each holder is looked up once; the table redraws only when a name was found (redrawing after every lookup made
+  // every redraw start another lookup, and the table rebuilt itself non-stop).
+  const HW = { kol: new Map(), pump: new Map(), asked: new Set(), checked: new Set(), busy: false };
+  async function nameHolders(d) {
+    if (HW.busy || !d?.holders?.length) return;
+    const fresh = d.holders.filter((h) => !HW.checked.has(h.wallet));
+    if (!fresh.length) return;
+    HW.busy = true; let found = false;
+    try {
+      const k = await kolList();
+      for (const h of fresh) { HW.checked.add(h.wallet); const e = k.by.get(h.wallet); if (e) { HW.kol.set(h.wallet, e); found = true; } }
+      const ask = fresh.filter((h) => !isPool(h) && !HW.kol.has(h.wallet) && !HW.asked.has(h.wallet)).map((h) => h.wallet).slice(0, 100);
+      ask.forEach((w) => HW.asked.add(w));
+      if (ask.length) for (const [w, v] of await whoIs(ask)) { HW.pump.set(w, v); found = true; }
+    } catch { /* names are optional */ } finally { HW.busy = false; }
+    if (found && S.alive && S.tab === 'holders') { renderTool(); renderBodySoon(); }
+  }
+  const whoCell = (w) => {
+    const e = HW.kol.get(w) || HW.pump.get(w); if (!e) return '';
+    const pic = kolPic(e), kind = HW.kol.has(w) ? 'KOL' : 'pump.fun';
+    return `<span class="tt-who">${pic ? `<img src="${esc(pic)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}<b>${esc(e.name || '')}</b>${e.x ? `<a href="https://x.com/${esc(e.x)}" target="_blank" rel="noopener nofollow" class="dim">@${esc(e.x)}</a>` : ''}<span class="tt-b ${kind === 'KOL' ? 'kol' : 'pf'}">${kind}</span></span>`;
+  };
   function holdersTool() {
-    const d = holdersCached(mint);
-    return `<label class="tt-chk"><input type="checkbox" data-hidepool ${S.holders.hidePool ? 'checked' : ''}> Hide pools</label>
+    const d = holdersCached(mint), nk = d ? d.holders.filter((h) => HW.kol.has(h.wallet)).length : 0, np = d ? d.holders.filter((h) => HW.pump.has(h.wallet)).length : 0, v = S.holders.view || 'all';
+    return `<span class="tt-hseg" role="group" aria-label="Show holders">${[['all', 'All'], ['kol', `KOLs${nk ? ' ' + nk : ''}`], ['pump', `pump.fun${np ? ' ' + np : ''}`]].map(([k, l]) => `<button type="button" data-hview="${k}" class="${v === k ? 'on' : ''}">${l}</button>`).join('')}</span>
+      <label class="tt-chk"><input type="checkbox" class="switch" data-hidepool ${S.holders.hidePool ? 'checked' : ''}> Hide pools</label>
       <span class="tt-note">${d ? `${int(d.count)} holders · top ${d.holders.length} listed` : ''}</span><span class="tt-live">Click a wallet to scan it</span>`;
+  }
+  const HQ = { asked: new Set(), q: [], running: 0 };
+  function pumpHQ() {
+    while (HQ.running < 2 && HQ.q.length && S.alive) {
+      const w = HQ.q.shift(); HQ.running++;
+      scanHistory(hist(mint, w), { maxPages: 4, rps: 2, stop: () => !S.alive || S.tab !== 'holders' }).catch(() => {})
+        .finally(() => { HQ.running--; if (S.alive && S.tab === 'holders') renderBodySoon(); pumpHQ(); });
+    }
   }
   function holdersBody() {
     const c = holdersState(mint), d = c?.data;
@@ -579,24 +621,44 @@ export function mountTabs(el, ctx) {
     const supply = supplyOf(ctx), funders = new Map();
     for (const h of d.holders) if (h.funding?.from && !isPool(h)) funders.set(h.funding.from, (funders.get(h.funding.from) || 0) + 1);
     const holderSet = new Set(d.holders.map((h) => h.wallet));
-    const list = d.holders.filter((h) => !(S.holders.hidePool && isPool(h)));
-    if (!list.length) return `<div class="tt-msg">No holders to show.</div>`;
+    nameHolders(d);
+    const view = S.holders.view || 'all';
+    const list = d.holders.filter((h) => !(S.holders.hidePool && isPool(h)) && (view === 'all' || (view === 'kol' ? HW.kol.has(h.wallet) : HW.pump.has(h.wallet))));
+    if (!list.length) return `<div class="tt-msg">${view === 'all' ? 'No holders to show.' : view === 'kol' ? 'No KOLs among the top holders.' : 'No pump.fun profiles among the top holders.'}</div>`;
     const max = Math.max(...list.map((h) => h.amount), 1);
+    // what each holder bought and sold, and their average entry, from the coin's trade history (the Top traders scan)
+    const hh = all_(), byW = new Map(topRows().map((r) => [r.w, r]));
+    // holders whose trades aren't in the coin-wide history read so far: their own history, two wallets at a time
+    for (const h of list.slice(0, 40)) if (!isPool(h) && !byW.has(h.wallet) && !HQ.asked.has(h.wallet)) { HQ.asked.add(h.wallet); HQ.q.push(h.wallet); }
+    pumpHQ();
+    const own = (w) => { const x = histIf(mint, w); if (!x || x.next === undefined) return null; if (x._sv !== x.ver) { x._sv = x.ver; x._s = x.txs.length ? { s: statsOf(x.txs) } : 'none'; } return x._s; };
+    const entryMc = (r) => (r && r.s.bTok > 0 && r.s.bUsd > 0 && supply > 0 ? (r.s.bUsd / r.s.bTok) * supply : null);
+    const tradeCells = (h) => {
+      const o = byW.has(h.wallet) ? null : own(h.wallet), r = byW.get(h.wallet) || (o && o !== 'none' ? o : null);
+      if (o === 'none') return '<td class="dim" colspan="3">no buys or sells (received by transfer)</td>';
+      if (isPool(h)) return '<td class="dim">—</td><td class="dim">—</td><td class="dim">—</td>';
+      if (!r) return `<td class="dim" colspan="3">${hh.done ? 'no trades (received by transfer)' : hh.txs.length ? 'not in the trades read yet' : '<span class="tt-spin"></span>'}</td>`;
+      const e = entryMc(r);
+      return `<td class="${r.s.buys ? 'up' : ''}">${r.s.buys ? fmtSol(r.s.bSol) : '—'}<small>${plural(r.s.buys, 'buy')}</small></td>
+        <td class="${r.s.sells ? 'down' : ''}">${r.s.sells ? fmtSol(r.s.sSol) : '—'}<small>${plural(r.s.sells, 'sell')}</small></td>
+        <td>${e ? (r.s.partial ? '≈' : '') + usd(e) : '—'}<small>${e ? 'MC' : ''}</small></td>`;
+    };
     const rows = list.map((h, i) => {
       const share = supply > 0 ? (h.amount / supply) * 100 : 0, f = h.funding, shared = f && funders.get(f.from) > 1, fromHolder = f && holderSet.has(f.from);
       return `<tr class="tt-click${isPool(h) ? ' pool' : ''}" data-scanrow="${esc(h.wallet)}">
         <td class="dim">${i + 1}</td>
-        <td class="who"><button class="tt-w" data-scan="${esc(h.wallet)}">${esc(short(h.wallet))}</button>${badges(h.wallet, ctx, h.tags, h.labels)}</td>
+        <td class="who"><button class="tt-w" data-scan="${esc(h.wallet)}">${esc(short(h.wallet))}</button>${whoCell(h.wallet)}${badges(h.wallet, ctx, h.tags, h.labels)}</td>
         <td><span class="tt-pct"><span class="tt-bar-v"><i style="width:${Math.min(100, (h.amount / max) * 100).toFixed(1)}%"></i></span><b>${share >= 0.01 ? share.toFixed(2) : '&lt;0.01'}%</b></span></td>
         <td>${num(h.amount)}</td>
         <td>${fmtSol(h.sol)}</td>
+        ${tradeCells(h)}
         <td class="fund">${f ? `<a href="${esc(solscanAcct(f.from))}" target="_blank" rel="noopener" title="Funding wallet">${esc(short(f.from))}</a>${shared ? `<span class="tt-b warn" title="Heuristic: ${funders.get(f.from)} top holders were funded by this same wallet">×${funders.get(f.from)}</span>` : ''}${fromHolder ? '<span class="tt-b warn" title="Funded by another top holder">by holder</span>' : ''}<small>${fmtSol(f.amount)} SOL${f.at ? ' · ' + ago(f.at) + ' ago' : ''}</small>` : '<span class="dim">—</span>'}</td>
         <td><button class="tt-ico tt-star${trackedOf(h.wallet) ? ' on' : ''}" data-track="${esc(h.wallet)}" title="${trackedOf(h.wallet) ? 'Tracked' : 'Track this wallet'}" aria-label="Track this wallet">${ICON.star}</button></td></tr>`;
     }).join('');
     return `<div class="tt-scroll"><table class="tt-t tt-hold">
-      <thead><tr><th>#</th><th>Wallet</th><th>% of supply</th><th>Amount</th><th>SOL</th><th>Funded by</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Wallet</th><th>% of supply</th><th>Amount</th><th title="SOL in the wallet now">SOL bal.</th><th>Bought</th><th>Sold</th><th title="Average market cap they bought at">Avg entry</th><th>Funded by</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table>
-      <div class="tt-foot"><span class="dim">Top ${d.holders.length} wallets by balance (Jupiter). "×n" marks wallets funded by the same source: a heuristic, not proof.${c.err ? ' The last refresh failed; showing the previous list.' : ''}</span></div></div>`;
+      <div class="tt-foot"><span class="dim">Top ${d.holders.length} wallets by balance (Jupiter). Bought, sold and entry come from ${hh.done ? 'the full' : 'the latest'} trade history (${int(hh.txs.length)} trades${hh.done ? '' : ', still reading'}); ≈ means part of the cost is older than the trades read. "×n" marks wallets funded by the same source: a heuristic, not proof.${c.err ? ' The last refresh failed; showing the previous list.' : ''}</span></div></div>`;
   }
 
   // ---------------------------------------------------------------- Top traders
@@ -604,8 +666,8 @@ export function mountTabs(el, ctx) {
     const T = S.top, h = all_();
     if (T.running || h.done || h.pages >= 150) return;
     T.running = true; T.stopped = false; renderTool();
-    scanHistory(h, { maxPages: 150, rps: 3, stop: () => !S.alive || T.stopped, progress: () => { if (S.alive && S.tab === 'top' && Date.now() - T.lastAgg > 900) { T.lastAgg = Date.now(); renderBodySoon(); renderTool(); } } })
-      .finally(() => { T.running = false; if (S.alive && S.tab === 'top') { renderTool(); renderBody(); } });
+    scanHistory(h, { maxPages: 150, rps: 3, stop: () => !S.alive || T.stopped, progress: () => { if (S.alive && (S.tab === 'top' || S.tab === 'holders') && Date.now() - T.lastAgg > 900) { T.lastAgg = Date.now(); renderBodySoon(); renderTool(); } } })
+      .finally(() => { T.running = false; if (S.alive && (S.tab === 'top' || S.tab === 'holders')) { renderTool(); renderBody(); } });
   }
   function topRows() {
     const T = S.top, h = all_();
@@ -652,6 +714,19 @@ export function mountTabs(el, ctx) {
     const D = S.dev, dev = tokOf(ctx).dev;
     if (!dev || D.busy) return;
     D.busy = true;
+    // the creator's other coins (pump.fun's list, then their market caps from Jupiter) and what they hold of this one now
+    if (D.created === undefined) {
+      D.created = null;
+      createdBy(dev).then(async (c) => {
+        D.created = c || { count: null, coins: [], failed: true };
+        if (c?.count != null) setN('dev', c.count);
+        if (S.alive && S.tab === 'dev') renderBody();
+        const mints = (c?.coins || []).map((x) => x.mint).filter((m) => m !== mint);
+        if (mints.length) for (const tk of await jt.search(mints, { prio: 'low' }).catch(() => [])) D.toks.set(tk.mint, tk);
+        if (S.alive && S.tab === 'dev') renderBody();
+      }).catch(() => { D.created = { count: null, coins: [], failed: true }; });
+    }
+    tokenBalance(dev, mint, { prio: 'low' }).then((b) => { const t = tokOf(ctx), sup = t.totalSupply || 1e9; D.holds = (b.ui / sup) * 100; if (S.alive && S.tab === 'dev') renderBody(); }).catch(() => {});
     const h = hist(mint, dev);
     if (h.next === undefined) await scanHistory(h, { maxPages: 5, rps: 3, stop: () => !S.alive }); else await refreshHead(h);
     D.busy = false;
@@ -660,7 +735,14 @@ export function mountTabs(el, ctx) {
   function devBody() {
     const t = tokOf(ctx), dev = t.dev;
     if (!dev) return `<div class="tt-msg">The creator of this coin is not known yet.</div>`;
-    const theirs = all().filter((x) => x.dev === dev && x.mint !== mint).sort((a, b) => (b.created || 0) - (a.created || 0));
+    const D = S.dev, seen = new Map(all().filter((x) => x.dev === dev).map((x) => [x.mint, x]));
+    // pump.fun's list of the creator's coins, plus any other coin of theirs Nought has met (other launchpads), newest first
+    const list = new Map();
+    for (const c of D.created?.coins || []) list.set(c.mint, { ...c, ...(seen.get(c.mint) || {}), ...(D.toks.get(c.mint) || {}), mint: c.mint, created: c.at || seen.get(c.mint)?.created, migrated: c.done || D.toks.get(c.mint)?.migrated || seen.get(c.mint)?.migrated, launchpad: D.toks.get(c.mint)?.launchpad || 'pump.fun' });
+    for (const [m, x] of seen) if (!list.has(m)) list.set(m, x);
+    list.delete(mint);
+    const theirs = [...list.values()].sort((a, b) => (b.created || 0) - (a.created || 0));
+    const nCreated = D.created?.count ?? t.devMints, holds = D.holds ?? t.devPct;
     const rate = t.devMints > 0 && t.devMigrations != null ? (t.devMigrations / t.devMints) * 100 : null;
     const h = histIf(mint, dev), s = h ? statsOf(h.txs) : null;
     const devLine = !h || h.next === undefined ? (h?.err ? `<span class="down">${esc(h.err)}</span>` : '<span class="tt-spin"></span>Reading the creator\'s trades in this coin…')
@@ -672,14 +754,14 @@ export function mountTabs(el, ctx) {
     return `<div class="tt-scroll">
       <div class="tt-dev">
         <div class="tt-kv"><span>Creator</span><b class="mono"><button class="tt-w" data-scan="${esc(dev)}" title="Scan the creator">${esc(short(dev, 5))}</button><button class="copy" data-copy="${esc(dev)}" title="Copy address" aria-label="Copy address">${ICON.copy}</button><a class="tt-tx" href="${esc(solscanAcct(dev))}" target="_blank" rel="noopener" title="Solscan" aria-label="Open on Solscan">${EXT}</a></b></div>
-        <div class="tt-kv"><span>Coins created</span><b>${int(t.devMints)}</b></div>
+        <div class="tt-kv"><span>Coins created</span><b>${int(nCreated)}</b></div>
         <div class="tt-kv"><span>Migrated</span><b>${int(t.devMigrations)}${rate != null ? ` <small>${rate.toFixed(0)}%</small>` : ''}</b></div>
-        <div class="tt-kv"><span>Dev holds</span><b>${t.devPct != null ? Number(t.devPct).toFixed(2) + '%' : '—'}</b></div>
+        <div class="tt-kv"><span>Dev holds</span><b>${holds != null ? Number(holds).toFixed(2) + '%' : '—'}</b></div>
       </div>
       <div class="tt-devline">${devLine}</div>
-      <table class="tt-t tt-devt"><thead><tr><th>Other coins by this creator seen here</th><th>Age</th><th>MC</th><th>Status</th><th>Launchpad</th></tr></thead>
-      <tbody>${rows || emptyRow(5, 'None seen yet. Jupiter does not list a creator\'s coins by address, so this only shows coins Nought has met in this browser.')}</tbody></table>
-      <div class="tt-foot"><span class="dim">Counts from Jupiter's audit. The list grows as Pulse and the live stream see more coins.</span></div></div>`;
+      <table class="tt-t tt-devt"><thead><tr><th>Other coins by this creator${D.created?.count > 50 ? ` <span class="dim">(newest 50 of ${int(D.created.count)})</span>` : ''}</th><th>Age</th><th>MC</th><th>Status</th><th>Launchpad</th></tr></thead>
+      <tbody>${rows || emptyRow(5, D.created === null ? '<span class="tt-spin"></span>Loading the creator\'s coins from pump.fun…' : D.created?.failed ? 'pump.fun did not answer. Open the tab again to retry.' : 'No other coins by this creator.')}</tbody></table>
+      <div class="tt-foot"><span class="dim">Coins from pump.fun's creator list; market caps from Jupiter; migrated count from Jupiter's audit; dev holds read from the chain.</span></div></div>`;
   }
 
   // ---------------------------------------------------------------- rendering
@@ -689,7 +771,7 @@ export function mountTabs(el, ctx) {
     if (tool.dataset.tab === S.tab && tool.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') { updateLive(); return; } // don't wipe what is being typed
     const f = TOOL[S.tab], html = f ? f() : '';
     tool.innerHTML = html; tool.dataset.tab = S.tab; tool.hidden = !html;
-    updateLive();
+    updateLive(); syncHead();
   }
   function updateLive() {
     const l = tool.querySelector('[data-tlive]'); if (!l) return;
@@ -704,16 +786,18 @@ export function mountTabs(el, ctx) {
     if (S.pressing) { S.dirty = true; return; }
     const sc = body.querySelector('.tt-scroll'), top = sc ? sc.scrollTop : 0, h0 = sc ? sc.scrollHeight : 0, left = sc ? sc.scrollLeft : 0, same = body.dataset.tab === S.tab;
     const html = BODY[S.tab]();
-    if (same && S.tab === 'trades' && body.querySelector('tbody [data-trade-key]')) {
-      const template = document.createElement('template'); template.innerHTML = html;
+    // Trades and Holders patch only the rows that changed, so pictures and the reader's place never jump
+    const KEY = { trades: 'tradeKey', holders: 'scanrow' }[S.tab], attr = { trades: 'data-trade-key', holders: 'data-scanrow' }[S.tab];
+    const template = KEY ? document.createElement('template') : null; if (template) template.innerHTML = html;
+    if (same && KEY && body.querySelector(`tbody [${attr}]`) && template.content.querySelector(`tbody [${attr}]`)) {
       const incoming = template.content.querySelector('tbody'), existing = body.querySelector('tbody');
-      const keyed = new Map([...existing.children].map((row) => [row.dataset.tradeKey, row]));
+      const keyed = new Map([...existing.children].map((row) => [row.dataset[KEY], row]));
       const stable = (row) => row.outerHTML.replace(/(data-age="\d+"[^>]*>)[^<]*/g, '$1');
-      const rows = [...incoming.children].map((row) => { const old = keyed.get(row.dataset.tradeKey); return old && stable(old) === stable(row) ? old : row; });
+      const rows = [...incoming.children].map((row) => { const old = keyed.get(row.dataset[KEY]); return old && stable(old) === stable(row) ? old : row; });
       const wanted = new Set(rows); for (const row of [...existing.children]) if (!wanted.has(row)) row.remove();
       let ref = existing.firstElementChild;
       for (const row of rows) { if (row === ref) ref = ref.nextElementSibling; else existing.insertBefore(row, ref); }
-      for (const selector of ['thead', '[data-tfoot]']) {
+      for (const selector of ['thead', '[data-tfoot]', '.tt-foot']) {
         const old = body.querySelector(selector), fresh = template.content.querySelector(selector);
         if (old && fresh) { if (old.innerHTML !== fresh.innerHTML) old.innerHTML = fresh.innerHTML; }
         else if (old) old.remove(); else if (fresh) body.querySelector('.tt-scroll').append(fresh);
@@ -726,14 +810,14 @@ export function mountTabs(el, ctx) {
   function render() {
     root.querySelectorAll('[data-ttab]').forEach((b) => { b.classList.toggle('on', b.dataset.ttab === S.tab); b.setAttribute('aria-selected', String(b.dataset.ttab === S.tab)); });
     renderTool(); renderBody();
-    const t = tokOf(ctx); if (t.devMints != null) setN('dev', t.devMints);
+    const t = tokOf(ctx); if (S.dev.created?.count != null) setN('dev', S.dev.created.count); else if (t.devMints != null) setN('dev', t.devMints);
   }
   function enter(tab) {
     S.tab = tab; persist(); body.dataset.tab = ''; render();
     if (tab === 'trades') { S.trades.shown = 100; pollTrades(true); }
     if (tab === 'positions') loadPositions();
     if (tab === 'orders') loadOrders();
-    if (tab === 'holders') loadHolders();
+    if (tab === 'holders') { loadHolders(); const h = all_(); if (h.next !== undefined && !h.done) refreshHead(h).then(() => S.alive && S.tab === 'holders' && renderBodySoon()); startTopScan(); }
     if (tab === 'top') { const h = all_(); if (h.next !== undefined && !h.done) refreshHead(h).then(() => S.alive && S.tab === 'top' && renderBody()); startTopScan(); }
     if (tab === 'dev') loadDev();
   }
@@ -753,6 +837,7 @@ export function mountTabs(el, ctx) {
     if (!b || !root.contains(b)) return;
     const d = b.dataset;
     if (d.ttab) return enter(d.ttab);
+    if (d.hview) { S.holders.view = d.hview; renderTool(); renderBody(); return; }
     if (d.scan) { if (isMint(d.scan)) ctx.openScan?.(d.scan); return; }
     if (d.fw) { if (isMint(d.fw)) setMode('wallet', d.fw); return; }
     if (d.tmode) return setMode(d.tmode);
@@ -819,7 +904,7 @@ export function mountTabs(el, ctx) {
   })));
   offs.push(subscribe(ctx, 'vault', () => refreshVault(true)));
   offs.push(subscribe(ctx, 'tracked', () => { forgetTracked(); if (S.tab === 'trades' || S.tab === 'holders' || S.tab === 'top') renderBodySoon(); S.marked.clear(); pushMarkers(true); }));
-  offs.push(subscribe(ctx, 'tokens', () => { const t = tokOf(ctx); if (t.devMints != null) setN('dev', t.devMints); if (S.tab === 'dev') renderBodySoon(); }));
+  offs.push(subscribe(ctx, 'tokens', () => { const t = tokOf(ctx); if (S.dev.created?.count != null) setN('dev', S.dev.created.count); else if (t.devMints != null) setN('dev', t.devMints); if (S.tab === 'dev') renderBodySoon(); }));
 
   // one heartbeat runs each tab's cadence; nothing polls while the page is hidden
   const beat = () => {
@@ -844,7 +929,7 @@ export function mountTabs(el, ctx) {
   if (S.tab !== 'trades') loadOlder(all_()).then(() => S.alive && pushMarkers());
 
   return () => {
-    S.alive = false; S.top.stopped = true;
+    S.alive = false; S.top.stopped = true; ro?.disconnect();
     timers.forEach((t) => { clearInterval(t); clearTimeout(t); }); clearTimeout(soon);
     offs.forEach((f) => { try { f(); } catch { /* already gone */ } });
     document.removeEventListener('visibilitychange', onVis);

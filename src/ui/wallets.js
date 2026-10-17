@@ -32,8 +32,9 @@ export function openWalletManager(v = 'home', a = null) {
 export const openDeposit = (address = wallet.owner) => openWalletManager('deposit', address);
 export const openWithdraw = (address = wallet.owner) => openWalletManager('withdraw', { from: address });
 // resolves once the vault is unlocked; rejects if the person closes the dialog
-export function requestUnlock(msg = 'Unlock your local wallets.') {
-  if (V.isUnlocked()) return Promise.resolve();
+// needPass: the passphrase itself is needed (sending funds out), not just kept signing keys
+export function requestUnlock(msg = 'Unlock your local wallets.', needPass = false) {
+  if (needPass ? V.hasPassKey() : V.isUnlocked()) return Promise.resolve();
   // if the dialog is already open (e.g. Withdraw → Send), come back to that view afterwards instead of closing
   const back = dlg?.open && view !== 'unlock' ? { view, arg } : dlg?.open ? arg?.back : null;
   return new Promise((res, rej) => { waiters.push({ res, rej }); openWalletManager('unlock', { msg, close: !back, back }); });
@@ -76,7 +77,7 @@ async function draw() {
 async function gate(next, a) {
   if (!V.supported()) { go('home'); return; }
   if (!(await V.hasVault())) go('setup', { then: next, a });
-  else if (!V.isUnlocked()) go('unlock', { then: next, a });
+  else if (!V.hasPassKey()) go('unlock', { then: next, a });
   else go(next, a);
 }
 const after = (a) => go(a?.then || 'home', a?.a ?? null);
@@ -163,28 +164,33 @@ const VIEWS = {
   unlock() {
     title('Unlock local wallets');
     body(`<form data-form="unlock" class="wm-form">
-      <p class="hint">${esc(arg?.msg || 'Enter your passphrase. Keys stay decrypted in this tab only, until you lock, go idle or close it.')}</p>
+      <p class="hint">${esc(arg?.msg || 'Enter your passphrase. With “Stay unlocked” on, trades sign without asking again on this device until you press Lock now.')}</p>
       <label>Passphrase<input type="password" name="pass" autocomplete="current-password" required autofocus></label>
+      <label class="check"><input type="checkbox" name="remember" ${V.remembered() ? 'checked' : ''}> Stay unlocked on this device <span class="hint">trades sign without asking again; sending funds out still asks</span></label>
       ${err}<div class="row-end"><button type="button" class="btn btn-ghost wm-left" data-act="erase">Forgot it?</button>${backBtn}<button class="btn btn-accent" type="submit">Unlock</button></div></form>`);
   },
   new() {
-    title('New local wallet');
+    title('New local wallets');
     body(`<form data-form="new" class="wm-form">
-      <label>Name <span class="hint">only you see it</span><input name="name" maxlength="32" placeholder="Sniper 1" autocomplete="off" autofocus></label>
-      <p class="hint">Nought makes a new keypair in this browser and stores it encrypted under your passphrase. You will see the secret key once, right after this.</p>
-      ${err}<div class="row-end">${backBtn}<button class="btn btn-accent" type="submit">Create wallet</button></div></form>`);
+      <label>Name <span class="hint">only you see it</span><input name="name" maxlength="28" placeholder="Sniper" autocomplete="off" autofocus></label>
+      <label>How many${sel('name="count"', [1, 2, 3, 5, 10].map((k) => `<option value="${k}">${k} wallet${k > 1 ? 's' : ''}</option>`).join(''))}</label>
+      <label class="check"><input type="checkbox" name="multi" checked> Trade with them together (multi-wallet)</label>
+      <p class="hint">Nought makes each keypair in this browser and stores it encrypted under your passphrase. You will see each secret key once, right after this. Several are numbered (Sniper 1, Sniper 2, ...). Fund each one with Deposit before trading.</p>
+      ${err}<div class="row-end">${backBtn}<button class="btn btn-accent" type="submit">Create</button></div></form>`);
   },
   created() {
-    title('Save your secret key');
-    const w = arg || {};
+    const list = arg?.list || (arg?.address ? [arg] : []), many = list.length > 1;
+    title(many ? `Save ${list.length} secret keys` : 'Save your secret key');
     body(`<div class="wm-form">
-      <div class="wm-warn bad"><b>Shown once.</b> Write this key down or store it in a password manager, offline if you can. Anyone who sees it can take everything in this wallet. Without it, clearing this browser's data or forgetting the passphrase loses the funds.</div>
-      <label>Address<span class="wm-addrbox mono">${esc(w.address)}</span></label>
-      <label>Secret key<div class="wm-secret blur" id="wm-secret">${esc(w.secret)}</div></label>
-      <div class="row-end"><button type="button" class="btn btn-ghost" data-act="reveal">Show</button><button type="button" class="btn" data-act="copy-secret">${ICON.copy} Copy secret key</button></div>
-      <label class="check"><input type="checkbox" data-ack-saved> I saved the secret key somewhere safe.</label>
+      <div class="wm-warn bad"><b>Shown once.</b> Write ${many ? 'these keys' : 'this key'} down or store ${many ? 'them' : 'it'} in a password manager, offline if you can. Anyone who sees a key can take everything in that wallet. Without it, clearing this browser's data or forgetting the passphrase loses the funds.</div>
+      ${list.map((w, i) => `<div class="wm-newkey">
+        <label>${many ? `${esc(w.name || 'Wallet ' + (i + 1))} · ` : ''}Address<span class="wm-addrbox mono">${esc(w.address)}</span></label>
+        <label>Secret key<div class="wm-secret blur"${i ? '' : ' id="wm-secret"'} data-secret="${i}">${esc(w.secret)}</div></label>
+        <div class="row-end">${i ? '' : `<button type="button" class="btn btn-ghost" data-act="reveal">Show</button>`}<button type="button" class="btn" data-act="copy-secret" data-i="${i}">${ICON.copy} Copy secret key</button></div></div>`).join('')}
+      <label class="check"><input type="checkbox" data-ack-saved> I saved ${many ? 'every' : 'the'} secret key somewhere safe.</label>
       <div class="row-end"><button type="button" class="btn btn-accent" data-act="done-created" disabled>Done</button></div></div>`);
-    arg = { address: w.address }; w.secret = ''; // the secret now lives only in the DOM, which wipeSecrets() clears
+    // the secrets now live only in the DOM, which wipeSecrets() clears
+    arg = { addresses: list.map((w) => w.address) }; list.forEach((w) => { w.secret = ''; });
   },
   import() {
     title('Import a wallet');
@@ -192,7 +198,7 @@ const VIEWS = {
       <label>Name<input name="name" maxlength="32" placeholder="Imported" autocomplete="off"></label>
       <label>Secret key <span class="hint">base58 (as Phantom or Solflare export it) or a JSON byte array like a Solana CLI id.json. Seed phrases are not supported yet.</span>
         <textarea name="secret" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" required autofocus></textarea></label>
-      <div class="wm-warn">Only import a key you are happy to keep hot in this browser. It is encrypted with your passphrase and never leaves this device.</div>
+      <div class="wm-warn">Only import a key you are happy to keep hot in this browser, ideally a trading wallet with just what you trade. It is encrypted with your passphrase and never leaves this device. While unlocked it is sealed inside the browser's own crypto: it can sign, but no page code can read it back. Before signing, every trade is simulated and may only go through Jupiter's programs.</div>
       ${err}<div class="row-end">${backBtn}<button class="btn btn-accent" type="submit">Import</button></div></form>`);
   },
   async export() {
@@ -391,14 +397,20 @@ const FORMS = {
     await V.setup(p); f.reset(); after(arg);
   },
   async unlock(f, fd) {
+    V.setRemember(fd.get('remember') === 'on');
     await V.unlock(String(fd.get('pass'))); f.reset();
     waiters.splice(0).forEach((w) => w.res());
     if (arg?.back) go(arg.back.view, arg.back.arg); else if (arg?.close) dlg.close(); else after(arg);
   },
   async new(f, fd) {
-    const w = await V.create(String(fd.get('name') || ''));
-    if (!wallet.owner) await useLocal(w.address);
-    go('created', w);
+    const k = Math.min(10, Math.max(1, Math.floor(Number(fd.get('count')) || 1))), base = String(fd.get('name') || '').trim(), made = [];
+    for (let i = 0; i < k; i++) made.push(await V.create(k > 1 ? `${base || 'Wallet'} ${i + 1}` : base));
+    if (!wallet.owner) await useLocal(made[0].address);
+    // multi-wallet: tick the new wallets, plus the active one when it is kept in Nought, so the next trade runs on all
+    if (fd.get('multi') && (k > 1 || wallet.selected.length || (wallet.kind === 'local' && wallet.owner !== made[0].address))) {
+      for (const a of [...(wallet.kind === 'local' ? [wallet.owner] : []), ...made.map((w) => w.address)]) if (!wallet.selected.includes(a) && wallet.selected.length < MAX_SELECTED) selectWallet(a, true);
+    }
+    go('created', { list: made });
   },
   async import(f, fd) {
     const w = await V.importWallet(String(fd.get('secret') || ''), String(fd.get('name') || ''));
@@ -422,7 +434,7 @@ const FORMS = {
     if (!fd.get('ack')) throw new Error('Tick the box to confirm.');
     const a = arg;
     // a local sender must be unlocked first; then come back here and press Send again
-    if (!(wallet.kind === 'external' && a.from === wallet.owner) && !V.isUnlocked()) return go('unlock', { msg: 'Unlock your local wallets, then confirm the withdrawal again.', then: 'review', a });
+    if (!(wallet.kind === 'external' && a.from === wallet.owner) && !V.hasPassKey()) return go('unlock', { msg: 'Enter your passphrase, then confirm the withdrawal again.', then: 'review', a });
     const tx = a.asset === 'SOL' ? await transfer(a.to, a.raw, a.from) : await transferToken(a.asset, a.to, a.raw, a.from, a.dec);
     // what a local wallet's signer checks the transaction against: exactly the reviewed amount; fees as reviewed plus one
     // signature's worth of slack, and the receiver's token-account rent with a margin (its size varies with the mint)
@@ -456,14 +468,14 @@ async function onClick(e) {
     else if (act === 'ext') { if (await connectWallet(id)) go('home'); }
     else if (act === 'ext-off') await disconnectWallet();
     else if (act === 'use') { await useLocal(id); toast('Active wallet: <span class="mono">' + esc(short(id)) + '</span>', 'ok'); }
-    else if (act === 'lock') V.lock();
+    else if (act === 'lock') V.lock(true);
     else if (act === 'unlock') go('unlock');
     else if (act === 'new' || act === 'import') gate(act);
     else if (act === 'export') gate('export', id);
     else if (['deposit', 'rename', 'remove', 'erase'].includes(act)) go(act, id);
     else if (act === 'withdraw') go('withdraw', { from: id });
-    else if (act === 'reveal') { const s = $('#wm-secret', dlg); s?.classList.toggle('blur'); b.textContent = s?.classList.contains('blur') ? 'Show' : 'Hide'; }
-    else if (act === 'copy-secret') copySecret($('#wm-secret', dlg)?.textContent || '');
+    else if (act === 'reveal') { const all = [...dlg.querySelectorAll('.wm-secret')], hide = !all[0]?.classList.contains('blur'); all.forEach((s) => s.classList.toggle('blur', hide)); b.textContent = hide ? 'Show' : 'Hide'; }
+    else if (act === 'copy-secret') copySecret((b.dataset.i ? $(`[data-secret="${Number(b.dataset.i)}"]`, dlg) : $('#wm-secret', dlg))?.textContent || '');
     else if (act === 'done-created') go('home');
     else if (act === 'max') {
       const asset = $('#wd-asset', dlg)?.value, inp = dlg.querySelector('input[name="amount"]');
@@ -519,39 +531,36 @@ async function qr(text) {
 const CSS = `
 #wallet-mgr { width: min(600px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); }
 #wallet-mgr .wm { gap: 14px; }
-.wm-head { display: flex; align-items: center; gap: 10px; } .wm-head h2 { flex: 1; }
+.wm-head { display: flex; align-items: center; gap: 10px; margin: -4px -6px 0 0; } .wm-head h2 { flex: 1; font-size: 17px; }
 .wm-body, .wm-form { display: grid; gap: 12px; min-width: 0; }
 .wm-sec { display: grid; gap: 8px; min-width: 0; }
 .wm-sec + .wm-sec { padding-top: 6px; border-top: 1px solid var(--line); }
-.wm-sec h3 { margin: 0; color: var(--muted); font: 600 10.5px/1.2 var(--sans); text-transform: uppercase; letter-spacing: .07em; }
+.wm-sec h3 { margin: 0; color: var(--muted); font: 500 11px/1.2 var(--sans); text-transform: uppercase; letter-spacing: .04em; }
 #wm-body:focus-visible { outline: 0; } /* focused on open so the close button doesn't wear a ring; not a control */
 .wm p { margin: 0; line-height: 1.5; }
-.wm-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg); }
-.wm-row.on { border-color: var(--accent-2); }
+.wm-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-2); }
+.wm-row.on { border-color: var(--sel-line); background: color-mix(in srgb, var(--accent) 6%, var(--panel-2)); }
 .wm-id { display: grid; gap: 3px; min-width: 0; }
 .wm-id b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.wm-addr { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11.5px; }
+.wm-addr { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .wm-side { display: flex; align-items: center; gap: 8px; }
-.wm-bal { color: var(--fg); font-size: 12px; white-space: nowrap; }
+.wm-bal { color: var(--fg); font-size: 12.5px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wm-acts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .wm-grow { flex: 1; }
-.wm-tag { margin-left: 4px; padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font: 600 10px/1.4 var(--mono); vertical-align: 1px; }
+.wm-tag { margin-left: 4px; padding: 2px 7px; border-radius: var(--pill); background: var(--sel-bg); color: var(--sel-fg); font: 600 10.5px/1.3 var(--sans); vertical-align: 1px; }
 .wm-ic { display: inline-flex; padding: 2px; border: 0; background: none; color: var(--muted); }
 .wm-ic:hover { color: var(--fg); }
-.wm-noext { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; padding: 9px 12px; border: 1px dashed var(--line-2); border-radius: 9px; color: var(--muted); font-size: 12px; }
+.wm-noext { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-2); color: var(--muted); font-size: 12px; }
 .wm-noext i { font-style: normal; color: var(--dim); }
 .wm-get { display: inline-flex; align-items: baseline; gap: 2px; color: var(--accent); font-weight: 600; white-space: nowrap; }
 .wm-get:hover { text-decoration: underline; text-underline-offset: 3px; }
 .wm-get span { font-size: 10px; }
-#wallet-mgr .btn.sm { height: 26px; padding: 0 9px; font-size: 11.5px; }
-#wallet-mgr .btn.danger { color: var(--down); border-color: color-mix(in srgb, var(--down) 45%, transparent); }
-#wallet-mgr .btn.danger:hover { background: color-mix(in srgb, var(--down) 12%, transparent); }
 #wallet-mgr .dlg .wm-pick { font-weight: 500; font-size: 12px; color: var(--muted); gap: 6px; }
-#wallet-mgr select, #wallet-mgr textarea { width: 100%; min-width: 0; padding: 0 9px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--bg); color: var(--fg); font: 12px var(--mono); outline: 0; }
+#wallet-mgr select, #wallet-mgr textarea { width: 100%; min-width: 0; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); color: var(--fg); font: 12px var(--code); outline: 0; transition: border-color .12s, box-shadow .12s; }
 #wallet-mgr select { height: 36px; padding: 0 28px 0 11px; appearance: none; -webkit-appearance: none; cursor: pointer;
-  background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%237d8496' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center / 10px; }
+  background: var(--panel-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%237d8496' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center / 10px; }
 :root[data-theme="light"] #wallet-mgr select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23596073' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
-#wallet-mgr select:hover { border-color: var(--dim); }
+#wallet-mgr select:hover { border-color: var(--line-2); }
 #wallet-mgr select option { color: var(--fg); background: var(--panel); }
 #wallet-mgr textarea { padding: 9px 11px; resize: vertical; line-height: 1.45; }
 #wallet-mgr .wm-lock select { width: auto; height: 26px; padding: 0 24px 0 8px; background-position: right 8px center; }
@@ -561,13 +570,13 @@ const CSS = `
 .wm-sel-v > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .wm-sel-v .mono { flex: none; color: var(--muted); font-size: 12px; font-weight: 400; }
 .wm-sel-v.ph > span:first-child { color: var(--muted); font-weight: 400; }
-#wallet-mgr input:focus, #wallet-mgr select:focus, #wallet-mgr textarea:focus { border-color: var(--accent-2); }
+#wallet-mgr input:focus, #wallet-mgr select:focus, #wallet-mgr textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .wm-lock { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
 .wm-lock > .btn { margin-left: auto; } /* stays on the right when the row wraps on a phone */
-.wm-auto { display: flex; align-items: center; gap: 6px; margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--line-2); }
+.wm-auto { display: flex; align-items: center; gap: 6px; margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--line); }
 .wm-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
 .wm-dot.on { background: var(--up); box-shadow: 0 0 0 3px color-mix(in srgb, var(--up) 22%, transparent); }
-.wm-warn { padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--warn) 7%, transparent); font-size: 12px; line-height: 1.5; }
+.wm-warn { padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--warn) 7%, transparent); font-size: 12px; line-height: 1.5; }
 .wm-warn.bad { border-color: color-mix(in srgb, var(--down) 45%, transparent); background: color-mix(in srgb, var(--down) 8%, transparent); }
 .wm-why { padding: 0; }
 .wm-why summary { display: flex; align-items: center; gap: 10px; padding: 7px 12px; cursor: pointer; list-style: none; }
@@ -578,16 +587,19 @@ const CSS = `
 .wm-why p { padding: 0 12px 9px; color: var(--muted); }
 .wm-err { min-height: 0; margin: 0; color: var(--down); font-size: 12px; }
 .wm-err:empty { display: none; }
-.wm-secret { padding: 10px 12px; border: 1px dashed var(--warn); border-radius: 8px; background: var(--bg); font: 500 12px/1.5 var(--mono); word-break: break-all; user-select: all; }
+.wm-secret { padding: 10px 12px; border: 1px dashed var(--warn); border-radius: var(--radius-md); background: var(--panel-2); font: 500 12px/1.5 var(--code); word-break: break-all; user-select: all; }
 .wm-secret.blur { filter: blur(6px); user-select: none; }
-.wm-addrbox { display: block; padding: 9px 11px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--bg); font-size: 12px; font-weight: 500; word-break: break-all; text-align: center; }
-.wm-qr { display: grid; place-items: center; width: min(220px, 70vw); aspect-ratio: 1; margin: 0 auto; border-radius: 10px; overflow: hidden; background: #fff; color: #333; text-align: center; }
+.wm-newkey { display: grid; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.wm-newkey:last-of-type { border-bottom: 0; }
+.wm-addrbox { display: block; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); font: 500 12.5px/1.4 var(--code); word-break: break-all; text-align: center; }
+.wm-qr { display: grid; place-items: center; width: min(220px, 70vw); aspect-ratio: 1; margin: 0 auto; border-radius: var(--radius-md); overflow: hidden; background: #fff; color: #333; text-align: center; }
 .wm-center { text-align: center; justify-self: center; }
 .wm-amt { position: relative; display: block; }
 #wallet-mgr .wm-amt input { width: 100%; padding-right: 58px; }
-#wallet-mgr .wm-amt .btn { position: absolute; right: 5px; top: 5px; height: 26px; background: var(--panel-2); }
-.wm-big { font: 600 20px/1.25 var(--mono); word-break: break-word; }
-.wm-sum { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg); font-size: 12.5px; }
+#wallet-mgr .wm-amt .btn { position: absolute; right: 5px; top: 5px; height: 26px; border-color: transparent; background: var(--fill); color: var(--fg-2); }
+#wallet-mgr .wm-amt .btn:hover { background: var(--fill-2); color: var(--fg); }
+.wm-big { font: 600 22px/1.25 var(--mono); font-variant-numeric: tabular-nums; word-break: break-word; }
+.wm-sum { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-2); font-size: 12.5px; }
 .wm-sum > div { display: flex; justify-content: space-between; gap: 14px; }
 .wm-sum > div > span:first-child { flex: none; color: var(--muted); }
 .wm-sum > div > span:last-child { min-width: 0; text-align: right; word-break: break-all; }

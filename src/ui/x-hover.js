@@ -24,7 +24,7 @@ export function initXHover(root = document) {
   function later() { clearTimeout(closeTimer); if (!pinned) closeTimer = setTimeout(hide, 220); }
   function make(link, token) {
     const entry = document.createElement('section'); entry.className = 'xh-entry'; entry.dataset.key = link.url;
-    entry.innerHTML = `<header>${link.kind === 'post' ? ICON.tweet : ICON.x}<b>${esc(link.kind === 'post' ? 'Tweet' : link.kind === 'profile' ? 'X profile' : 'X community')}</b><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Open on X ↗</a><button type="button" class="xh-close" aria-label="Close X preview">×</button></header>`;
+    entry.innerHTML = `<header>${link.kind === 'post' ? ICON.tweet : link.kind === 'profile' ? ICON.xProfile : ICON.xCommunity}<b>${esc(link.kind === 'post' ? 'Tweet' : link.kind === 'profile' ? 'X profile' : 'X community')}</b><a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer">Open on X ↗</a><button type="button" class="xh-close" aria-label="Close X preview">×</button></header>`;
     if (link.kind === 'post') {
       const status = document.createElement('div'); status.className = 'xh-loading'; status.textContent = 'Loading post…'; entry.appendChild(status);
       const frame = document.createElement('iframe'); frame.title = 'Embedded X post'; frame.className = 'xh-frame'; frame.referrerPolicy = 'no-referrer';

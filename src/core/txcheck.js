@@ -14,7 +14,10 @@
 //   - a token account of the owner's changes hands, or an instruction uses the owner's authority for something a trade
 //     or a transfer never needs (approve a delegate, set an authority, close an account to someone else, mint, assign or
 //     allocate the wallet, nonce / stake / loader / lookup-table actions);
-//   - a swap delivers none of what it buys (or less than expect.minReceiveRaw when the caller passes it).
+//   - a swap delivers none of what it buys (or less than expect.minReceiveRaw when the caller passes it);
+//   - it calls, at the top level, any program outside the allowlist for its purpose (PROGRAMS below): a swap may only
+//     go through Jupiter's aggregator or JupiterZ, a limit order through Jupiter Trigger, a transfer through the system
+//     and token programs. Pools and AMMs are reached only inside those programs, never directly.
 // Whatever it can't establish is refused too (fail closed). A simulation is a strong check, not a proof: a program that
 // behaves differently later on-chain can't be seen in advance.
 // expect: {purpose: 'swap'|'limit-create'|'limit-cancel'|'transfer', spendMint: 'SOL'|mint, maxSpendRaw: string (raw
@@ -32,6 +35,19 @@ const BUDGET_MS = 8000, PARALLEL = 4; // per check once it runs; how many simula
 export const BUSY = 'Couldn\'t check this transaction before signing (the RPC is busy). Try again, or set your own RPC in Settings > Network.';
 const refuse = (why) => Object.assign(new Error('Nought did not sign this transaction: ' + why), { refused: true });
 const isToken = (pid) => pid === TOKEN || pid === TOKEN22;
+
+// The only programs a local wallet's transaction may call at the top level, by purpose. Read from Jupiter's own
+// transactions (Ultra via Metis and JupiterZ, /swap/v1, Trigger createOrder) on 2026-10-17. Anything else is refused,
+// so a bad API answer can't route a local wallet's signature through a program Nought has never seen.
+const CB = 'ComputeBudget111111111111111111111111111111', BASE = [CB, SYS, TOKEN, TOKEN22, ATA];
+export const JUPITER_AGG = 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', JUPITER_Z = '61DFfeTKM7trxYcPQCM78bJ794ddZprZpAwAnLiwTpYH', JUPITER_TRIGGER = 'j1o2qRpjcyUwEvwtcfhEQefh773ZgjxcVRry7LDqg5X';
+export const PUMP = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P', PUMP_AMM = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
+export const PROGRAMS = {
+  swap: new Set([...BASE, JUPITER_AGG, JUPITER_Z, PUMP, PUMP_AMM]),
+  'limit-create': new Set([...BASE, JUPITER_TRIGGER]), 'limit-cancel': new Set([...BASE, JUPITER_TRIGGER]),
+  transfer: new Set(BASE),
+};
+const PROGRAM_NAME = { [PUMP]: 'pump.fun', [PUMP_AMM]: 'PumpSwap', [JUPITER_AGG]: "Jupiter's aggregator", [JUPITER_Z]: 'JupiterZ', [JUPITER_TRIGGER]: 'Jupiter Trigger' };
 
 // What the owner's own authority may be used for, by program. The RPC names the inner instructions it parses; top-level
 // and unparsed ones are decoded here. Programs not listed are opaque (Jupiter, the pools): whatever they do to the
@@ -107,6 +123,11 @@ function vet({ pid, type, info }, owner) {
     if ((info.owner ?? info.multisigOwner) === owner && info.destination !== owner) throw refuse('it would close one of your token accounts and send its SOL to another wallet.');
     return;
   }
+  // unwrapLamports (SPL Token, used by Jupiter Ultra): turns wrapped SOL back into SOL; only into the owner's own wallet
+  if (type === 'unwrapLamports') {
+    if (info.destination && info.destination !== owner) throw refuse('it would unwrap your SOL into another wallet.');
+    return;
+  }
   if (!TOKEN_OK.has(type)) throw refuse(TOKEN_WHY[type] || `it would use your wallet's authority for a token instruction a trade never needs (${type}).`);
 }
 const amountOf = (info) => BigInt(String(info.amount ?? info.tokenAmount?.amount ?? info.lamports ?? 0));
@@ -167,6 +188,12 @@ export function judge(msg, v, owner, expect) {
   const lw = v.loadedAddresses?.writable || [], lr = v.loadedAddresses?.readonly || [];
   if (lw.length !== lookupCount(msg, 'writableIndexes') || lr.length !== lookupCount(msg, 'readonlyIndexes')) throw new Error(BUSY);
   const keys = [...msg.staticAccountKeys.map(String), ...lw, ...lr];
+  // 0. top-level programs: only the allowlist for this purpose (a program can't come from a lookup table)
+  const allowed = PROGRAMS[x.purpose];
+  for (const ix of msg.compiledInstructions) {
+    const pid = keys[ix.programIdIndex];
+    if (!allowed?.has(pid)) throw refuse(`it calls a program Nought doesn't ${x.purpose === 'transfer' ? 'send' : 'trade'} through (${PROGRAM_NAME[pid] || short(pid)}).`);
+  }
   if (v.preBalances.length !== keys.length || v.postBalances.length !== keys.length) throw new Error(BUSY);
   const verb = x.purpose === 'transfer' ? 'sending' : 'trading', spendSol = x.spend === 'SOL' ? x.max : 0n;
   const dec = new Map([...v.preTokenBalances, ...v.postTokenBalances].map((t) => [t.mint, t.uiTokenAmount?.decimals]));

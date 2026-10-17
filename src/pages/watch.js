@@ -9,7 +9,7 @@ import { register } from '../core/router.js';
 import { jt, ds, img } from '../core/jup.js';
 import { pricesFor } from '../core/price.js';
 import { tokens, upsert, mcUsd } from '../core/store.js';
-import { avatar, socials, qbButton } from '../ui/card.js';
+import { avatar, socials, qbButton, lpInfo } from '../ui/card.js';
 import { sparkCell, sparkWatcher } from '../ui/sparkline.js';
 import { isWatched, setWatched, watchMints } from '../core/watchlist.js';
 
@@ -58,7 +58,7 @@ const COLS = [
   { key: 'chg', label: '24h', cc: 'c-chg' },
   { key: 'mc', label: 'Market cap', cc: 'c-x' },
   { key: 'liq', label: 'Liquidity', cc: 'c-x' },
-  { key: 'vol', label: 'Vol 24h', cc: 'c-x' },
+  { key: 'vol', label: 'Volume 24h', cc: 'c-x' },
   { key: 'holders', label: 'Holders', cc: 'c-x' },
   { key: 'organic', label: 'Organic', title: 'Jupiter organic score, 0 to 100', cc: 'c-x' },
   { key: 'alerts', label: 'Alerts', cls: 'c-al' },
@@ -81,6 +81,10 @@ function rowOf(mint, order) {
   };
 }
 const label = (t) => (t.symbol ? '$' + t.symbol : short(t.mint));
+// the coin picture in a frame tinted with its launchpad's colour (grey when it has none), as on Pulse and Discover
+// the quick buy as the shared solid pill (style.css .qb.fill), "⚡ 0.1 SOL"
+const qbFill = (m) => qbButton(m, undefined, 'l', true, true);
+const framed = (t) => { const lp = lpInfo(t.launchpad); return `<span class="wl-av"${lp ? ` style="--lp:${esc(lp.color)}"` : ''}>${avatar(t, 'sm')}</span>`; };
 // prices: under $0.001 the zeros after the point go into a subscript count ($0.0₅2876), as on the token page
 const SUBS = '₀₁₂₃₄₅₆₇₈₉';
 export function priceTxt(p) {
@@ -134,7 +138,7 @@ register({
       const t = r.t, prev = prevPrice.get(r.mint), fl = prev != null && r.price != null && prev !== r.price ? (r.price > prev ? ' fl-up' : ' fl-dn') : '';
       const soc = socials(t), og = r.organic;
       return `<tr data-mint="${esc(r.mint)}">
-        <td class="c-coin"><div class="wl-coin">${avatar(t, 'sm')}<div class="wl-ct"><div class="wl-c1"><b>${esc(t.symbol || short(r.mint))}</b><button class="copy" data-copy="${esc(r.mint)}" title="Copy address">${ICON.copy}</button></div><div class="wl-c2"><span class="wl-nm">${esc(t.name || (stats.has(r.mint) || W.sAt ? '' : 'Loading…'))}</span>${soc ? `<span class="soc">${soc}</span>` : ''}</div></div></div></td>
+        <td class="c-coin"><div class="wl-coin">${framed(t)}<div class="wl-ct"><div class="wl-c1"><b>${esc(t.symbol || short(r.mint))}</b><button class="copy" data-copy="${esc(r.mint)}" title="Copy address">${ICON.copy}</button></div><div class="wl-c2"><span class="wl-nm">${esc(t.name || (stats.has(r.mint) || W.sAt ? '' : 'Loading…'))}</span>${soc ? `<span class="soc">${soc}</span>` : ''}</div></div></div></td>
         <td class="c-spark">${sparkCell(r.mint)}</td>
         <td class="n c-px${fl}"><b>${priceTxt(r.price)}</b></td>
         <td class="n c-chg ${cls(r.chg)}">${pct(r.chg)}</td>
@@ -144,7 +148,7 @@ register({
         <td class="n c-x">${r.holders == null ? '<span class="dim">–</span>' : num(r.holders)}</td>
         <td class="n c-x">${og == null ? '<span class="dim" title="No organic score yet">–</span>' : `<span class="wl-org${og >= 60 ? ' ok' : og >= 30 ? ' mid' : ''}" title="${og >= 60 ? 'Mostly real activity' : og >= 30 ? 'Mixed activity' : 'Little activity that looks organic'}">${Math.round(og)}</span>`}</td>
         <td class="c-al"><button class="wl-bell${r.alerts ? ' on' : ''}${W.open === r.mint ? ' open' : ''}" data-al="${esc(r.mint)}" title="Price and market cap alerts" aria-label="Alerts for ${esc(label(t))}">${ICON.bell}${r.al.length ? `<b>${r.alerts}${r.al.length > r.alerts ? '/' + r.al.length : ''}</b>` : ''}</button></td>
-        <td class="c-act"><div class="wl-acts">${qbButton(r.mint)}<button class="wl-rm" data-rm="${esc(r.mint)}" title="Remove from watchlist" aria-label="Remove ${esc(label(t))}">${ICON.close}</button></div></td>
+        <td class="c-act"><div class="wl-acts">${qbFill(r.mint)}<button class="wl-rm" data-rm="${esc(r.mint)}" title="Remove from watchlist" aria-label="Remove ${esc(label(t))}">${ICON.close}</button></div></td>
       </tr>`;
     }
     function render() {
@@ -156,7 +160,7 @@ register({
         : W.pAt ? `Prices <span data-age="${W.pAt}">0s</span> ago · every 10 s` : '<span class="wl-dot"></span>Loading prices…';
       $('.wl-q', view).hidden = !mints.length; // nothing to filter yet
       if (!mints.length) {
-        if (!$('#wl-tr', tw)) tw.innerHTML = `<div class="empty-state wl-es"><span class="es-ic">${ICON.star}</span><h3>Nothing on your watchlist yet</h3><p>Star a coin anywhere in Nought, or paste a token address above. Starred coins get live prices, an 8-hour chart and price alerts here.</p><div class="es-acts"><a class="btn btn-accent" href="#/discover">Open Discover</a><a class="btn" href="#/pulse">Open Pulse</a></div>
+        if (!$('#wl-tr', tw)) tw.innerHTML = `<div class="empty-state wl-es"><span class="es-ic">${ICON.star}</span><h3>Nothing on your watchlist yet</h3><p>Star a coin anywhere in Nought, or paste a token address above. Starred coins get live prices, an 8-hour chart and price alerts here.</p><div class="es-acts"><a class="btn btn-accent" href="#/scope">Open Scope</a></div>
           <section class="wl-tr" aria-label="Trending now"><h4>Trending now <span>Jupiter · 1h</span></h4><div id="wl-tr"></div></section></div>`;
         drawTrend(); loadTrend();
         W.open = null; drawPanel(); return;
@@ -177,7 +181,7 @@ register({
       const rows = trend.rows.filter((t) => isMint(t.mint)).slice(0, 5);
       el.innerHTML = rows.length ? rows.map((t) => {
         const ch = t.stats1h?.priceChange, sym = t.symbol || short(t.mint);
-        return `<div class="wl-tr-r" data-mint="${esc(t.mint)}">${avatar(t, 'sm')}<span class="wl-tr-n"><b>${esc(sym)}</b><span>${esc(t.name || '')}</span></span><span class="wl-tr-v"><b>${usd(t.mcUsd)}</b><small class="${cls(ch)}">${pct(ch)}</small></span><button class="wl-tr-star" data-wstar="${esc(t.mint)}" title="Add ${esc(label(t))} to your watchlist" aria-label="Star ${esc(label(t))}">${ICON.star}</button></div>`;
+        return `<div class="wl-tr-r" data-mint="${esc(t.mint)}">${framed(t)}<span class="wl-tr-n"><b>${esc(sym)}</b><span>${esc(t.name || '')}</span></span><span class="wl-tr-v"><b>${usd(t.mcUsd)}</b><small class="${cls(ch)}">${pct(ch)}</small></span><button class="wl-tr-star" data-wstar="${esc(t.mint)}" title="Add ${esc(label(t))} to your watchlist" aria-label="Star ${esc(label(t))}">${ICON.star}</button></div>`;
       }).join('') : trend.err && !trend.busy ? `<p class="wl-tr-msg">Trending coins did not load. <button class="wl-mini" data-trretry>Try again</button></p>`
         : '<div class="wl-tr-r sk" aria-hidden="true"><i class="skel"></i><i class="skel"></i><i class="skel"></i></div>'.repeat(5);
     }

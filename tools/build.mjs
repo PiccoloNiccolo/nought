@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { join, relative } from 'node:path';
 const root = fileURLToPath(new URL('..', import.meta.url)), out = join(root, 'dist');
 await rm(out, { recursive: true, force: true }); await mkdir(out);
-for (const entry of ['index.html', 'app.js', 'style.css', 'favicon.svg', 'LICENSE', 'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md', 'src', 'css', 'data', 'docs']) {
+for (const entry of ['index.html', 'app.js', 'style.css', 'favicon.svg', 'LICENSE', 'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md', 'src', 'css', 'data']) {
   await cp(join(root, entry), join(out, entry), { recursive: true, filter: (p) => !relative(root, p).split('/').some((x) => x.startsWith('.')) });
 }
 const manifest = []; let bytes = 0, compressed = 0;

@@ -4,6 +4,7 @@
 // helpers live in jup.js (so adapters can use them) and are re-exported here.
 import { getJson, safeUrl } from './util.js';
 import { tokens, upsert, changed } from './store.js';
+import { settings } from './settings.js';
 import { ds, cidPath, ipfs, img, imgFallback, GATEWAYS } from './jup.js';
 export { cidPath, ipfs, img, imgFallback, GATEWAYS };
 
@@ -75,9 +76,17 @@ export function wantMeta(t, { priority = false } = {}) {
 }
 // Race an alternate after 250ms. Missing individual CIDs must not suspend an
 // entire gateway. Respect actual 429s while keeping fresh launches moving.
+// gateway.pinata.cloud is the one browser-readable gateway for CIDs pump.fun's gateway has not pinned, and it takes
+// 4-7 s to find them (measured 2026-10-17). It gets a longer timeout, and the job hands its queue slot back while it
+// waits (onSlow) so fresh launches keep resolving through the fast gateway.
+const SLOW_MS = 12000, SLOW_HOST = (() => { try { return new URL(GATEWAYS[1]).host; } catch { return ''; } })();
 const skipUntil = new Map();
-function fetchMeta(uri) {
-  const ipfsy = !!cidPath(uri), urls = [...new Set((ipfsy ? [ipfs(uri, 0), safeUrl(uri), ipfs(uri, 1)] : [safeUrl(uri)]).filter(Boolean))];
+// With a relay (Settings → Metadata relay, tools/meta-relay.mjs) the server reads documents browsers cannot: hosts
+// without CORS and unpinned CIDs. It is raced right after the fastest direct source.
+const relayFor = uri => settings.metaRelay ? `${settings.metaRelay}/meta?url=${encodeURIComponent(uri)}` : '';
+function fetchMeta(uri, onSlow) {
+  const ipfsy = !!cidPath(uri), relay = relayFor(uri);
+  const urls = [...new Set((ipfsy ? [ipfs(uri, 0), relay, safeUrl(uri), ipfs(uri, 1)] : [safeUrl(uri), relay]).filter(Boolean))];
   let promote;
   const result = new Promise((resolve, reject) => {
     const tried = new Set(), running = new Set(); let settled = false, hedge = false, timer, retry, deadline;
@@ -97,7 +106,9 @@ function fetchMeta(uri) {
         else if (remaining.length) { clearTimeout(retry); retry = setTimeout(pump, 50); }
         return;
       }
-      tried.add(url); const host = new URL(url).host, controller = new AbortController();
+      // the relay races every IPFS gateway itself (up to ~4 s for a fresh file), so it gets the slow allowance too
+      tried.add(url); const host = new URL(url).host, controller = new AbortController(), slow = host === SLOW_HOST || (!!settings.metaRelay && url.startsWith(settings.metaRelay + '/')), wait = slow ? SLOW_MS : 2500;
+      if (slow) { clearTimeout(deadline); deadline = setTimeout(() => finish(), SLOW_MS + 500); onSlow?.(); }
       activeHosts.set(host, (activeHosts.get(host) || 0) + 1);
       const attempt = { controller, ended: false, release() {
         if (attempt.ended) return; attempt.ended = true; clearTimeout(attempt.timer); running.delete(attempt);
@@ -109,8 +120,8 @@ function fetchMeta(uri) {
         if (/^429/.test(e?.message)) skipUntil.set(host, Date.now() + 5000);
         hedge = true; pump();
       };
-      attempt.timer = setTimeout(() => failed(new Error('Metadata timeout')), 2500);
-      Promise.resolve().then(() => getJson(url, { signal: controller.signal, credentials: 'omit' }, 2500)).then(value => {
+      attempt.timer = setTimeout(() => failed(new Error('Metadata timeout')), wait);
+      Promise.resolve().then(() => getJson(url, { signal: controller.signal, credentials: 'omit' }, wait)).then(value => {
         if (settled || attempt.ended) return;
         if (!value || typeof value !== 'object' || Array.isArray(value)) { failed(new Error('Invalid token metadata')); return; }
         finish(value);
@@ -131,7 +142,8 @@ function run() {
     const index = metaQ.findIndex(job => (busy < 4 || job.priority) && (activeHosts.get(hostOf(job.uri)) || 0) < (job.priority ? 6 : 4));
     if (index < 0) break;
     const [job] = metaQ.splice(index, 1); busy++;
-    job.load = fetchMeta(job.uri);
+    const free = () => { if (job.freed) return; job.freed = true; busy--; };
+    job.load = fetchMeta(job.uri, () => { free(); Promise.resolve().then(run); });
     if (job.priority) job.load.promote(); // visible coins race now, background work hedges after 250ms
     job.load.then(m => {
       const value = fields(m), ttl = value.image ? (cidPath(job.uri) ? 86400000 : 300000) : 5000;
@@ -143,7 +155,7 @@ function run() {
     }).catch(() => {
       const attempts = failures.get(job.key) || 0; failures.set(job.key, attempts + 1);
       metaSeen.set(job.key, Date.now() + Math.min(30000, 2000 * (2 ** Math.min(attempts, 4))));
-    }).finally(() => { jobs.delete(job.key); busy--; run(); });
+    }).finally(() => { jobs.delete(job.key); free(); run(); });
   }
 }
 if (typeof document !== 'undefined') document.addEventListener('visibilitychange', run);

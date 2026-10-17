@@ -1,4 +1,4 @@
-// Start a local preview independently of the terminal/chat session that launched it.
+// Start a local preview independently of the terminal that launched it.
 // No login item, launch agent, external listener, or public deployment is installed.
 import { spawn } from 'node:child_process';
 import { mkdir, open, access, writeFile, readFile } from 'node:fs/promises';
@@ -43,5 +43,5 @@ if (await running()) {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   if (!ready) throw new Error(`The preview did not start. Details: ${logPath}`);
-  console.log(`Nought is running independently in the background.\nOpen ${url}/#/pulse\nAfter restarting your Mac, run this launcher again.\nLog: ${logPath}`);
+  console.log(`Nought is running independently in the background.\nOpen ${url}/#/pulse\nAfter restarting your computer, run this launcher again.\nLog: ${logPath}`);
 }

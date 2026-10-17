@@ -1,19 +1,53 @@
 // Local hot wallets: Solana keypairs made in this browser, encrypted under one passphrase and kept in IndexedDB
 // (database 'nought', store 'vault'). PBKDF2-SHA256 (600k iterations, random 16-byte salt) derives an AES-GCM-256 key;
 // every secret is sealed with its own random 12-byte IV and its address as additional data, so records can't be swapped.
-// Decrypted secrets live only in memory while unlocked; lock() zeroes them. Nothing here writes a plaintext secret to
-// storage or the console. Needs a secure page (https or localhost) for WebCrypto. Emits 'vault' on every change.
+// Sealed keys: on unlock (and on create/import) each secret is decrypted, checked against its address and handed to the
+// browser's own Ed25519 as a NON-EXTRACTABLE CryptoKey; the plaintext bytes are zeroed at once. From then on the key
+// can sign but nothing in the page (Nought's code, an extension's injected script, a bug) can read it back: a stolen
+// key needs the passphrase and the encrypted copy. Browsers without WebCrypto Ed25519 keep the old in-memory copy
+// (state().sealed tells which). lock() drops every key. Nothing here writes a plaintext secret to storage or the
+// console. Needs a secure page (https or localhost) for WebCrypto. Emits 'vault' on every change.
 import { LS, emit } from './util.js';
 
 const DB = 'nought', STORE = 'vault', META = '_meta', ITER = 600000, CHECK = 'nought-vault-v1';
-const keys = new Map(); // address → Uint8Array(64) secret, only while unlocked
+const keys = new Map(); // address → {key: CryptoKey (non-extractable Ed25519)} or, without browser Ed25519, {raw: Uint8Array(64)}; only while unlocked
 let aes = null;         // the derived CryptoKey (non-extractable), only while unlocked
 let lastActive = Date.now();
 const web3 = () => { if (!window.solanaWeb3) throw new Error('Solana library did not load. Reload the page.'); return window.solanaWeb3; };
 
+// Stay unlocked on this device (default on): the sealed, non-extractable signing keys are kept in IndexedDB ('_sealed'),
+// so a reload or a new tab can sign trades without the passphrase. Page code still can't read a key, trades still pass
+// txcheck's program allowlist, and anything that needs the passphrase-derived key (transfers out, export, adding a
+// wallet) still asks for it. "Lock now" or turning this off deletes the kept keys.
+const SEALED = '_sealed';
+export const remembered = () => LS.get('vault.remember', true) !== false;
+let restored = false; // signing keys came back from IndexedDB without the passphrase this session
+export const hasPassKey = () => !!aes;
 export const supported = () => !!(globalThis.isSecureContext && globalThis.crypto?.subtle && globalThis.indexedDB);
-export const isUnlocked = () => !!aes;
-export const state = () => ({ unlocked: !!aes, count: keys.size });
+export const isUnlocked = () => !!aes || (restored && keys.size > 0);
+export const state = () => ({ unlocked: isUnlocked(), count: keys.size, sealed: sealedOk === true, remembered: remembered() });
+
+// ---- sealed keys: the browser's Ed25519, keys imported non-extractable ----
+const PKCS8_ED25519 = [0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20];
+let sealedOk = null; // null: not tested yet
+async function canSeal() {
+  if (sealedOk == null) { try { await crypto.subtle.generateKey({ name: 'Ed25519' }, false, ['sign']); sealedOk = true; } catch { sealedOk = false; } }
+  return sealedOk;
+}
+// sk: a 64-byte Solana secret (seed + public key). Returns the in-memory entry and ZEROES sk when sealed.
+async function holdKey(sk) {
+  if (!(await canSeal())) return { raw: sk };
+  const der = new Uint8Array(48); der.set(PKCS8_ED25519); der.set(sk.subarray(0, 32), 16);
+  try {
+    const key = await crypto.subtle.importKey('pkcs8', der, { name: 'Ed25519' }, false, ['sign']);
+    // prove the sealed key is the address's key before trusting it: sign a probe and verify with the public half
+    const pub = await crypto.subtle.importKey('raw', sk.slice(32, 64), { name: 'Ed25519' }, false, ['verify']);
+    const probe = crypto.getRandomValues(new Uint8Array(32));
+    if (!(await crypto.subtle.verify('Ed25519', pub, await crypto.subtle.sign('Ed25519', key, probe), probe))) throw new Error('Sealed key check failed.');
+    return { key };
+  } finally { der.fill(0); sk.fill(0); }
+}
+const drop = (e) => { e?.raw?.fill(0); };
 
 // ---- base58 (web3.js's IIFE does not expose bs58) ----
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -62,7 +96,28 @@ async function write(fn) {
   return new Promise((res, rej) => { t.oncomplete = () => res(); t.onerror = t.onabort = () => rej(t.error || new Error('Could not save to this browser.')); });
 }
 const getRec = (id) => read((s) => s.get(id));
-const allRecs = () => read((s) => s.getAll());
+const allRecs = async () => (await read((s) => s.getAll())).filter((r) => r.id !== SEALED);
+// keep (or forget) the sealed signing keys on this device
+async function keepSealed() {
+  if (!remembered() || sealedOk !== true) return forgetSealed();
+  const list = [...keys].filter(([, e]) => e.key).map(([address, e]) => [address, e.key]);
+  try { await write((s) => s.put({ id: SEALED, keys: list, at: Date.now() })); } catch { /* best effort */ }
+}
+async function forgetSealed() { try { await write((s) => s.delete(SEALED)); } catch { /* nothing kept */ } }
+export function setRemember(on) { LS.set('vault.remember', !!on); if (on) keepSealed(); else forgetSealed(); emit('vault', state()); }
+// at load: bring back the kept signing keys, so trades sign without asking for the passphrase
+async function restore() {
+  if (!supported() || !remembered() || aes || keys.size) return;
+  try {
+    const rec = await getRec(SEALED);
+    if (!rec || !Array.isArray(rec.keys)) return;
+    const ids = new Set((await list()).map((w) => w.address));
+    for (const [address, key] of rec.keys) if (ids.has(address) && key && typeof key === 'object' && key.type === 'private' && key.extractable === false) keys.set(address, { key });
+    if (keys.size) { restored = true; emit('vault', state()); }
+  } catch { /* locked as before */ }
+}
+let readyP = null;
+export const whenReady = () => (readyP ||= restore());
 
 // ---- crypto ----
 const enc = new TextEncoder();
@@ -114,30 +169,40 @@ export async function unlock(pass) {
   for (const r of (await allRecs()).filter((x) => x.id !== META)) {
     try {
       const sk = await unseal(key, r, r.id);
-      if (W.Keypair.fromSecretKey(sk).publicKey.toBase58() === r.id) next.set(r.id, sk); else sk.fill(0);
+      if (W.Keypair.fromSecretKey(sk).publicKey.toBase58() === r.id) next.set(r.id, await holdKey(sk)); else sk.fill(0);
     } catch { /* a damaged record stays locked; the others still open */ }
   }
   wipe(); next.forEach((v, k) => keys.set(k, v));
-  aes = key; touch(); emit('vault', state());
+  aes = key; restored = false; touch(); keepSealed(); emit('vault', state());
 }
-function wipe() { for (const k of keys.values()) k.fill(0); keys.clear(); }
-export function lock() { const was = !!aes; wipe(); aes = null; if (was) emit('vault', state()); }
+function wipe() { for (const k of keys.values()) drop(k); keys.clear(); }
+// lock(true) is the explicit "Lock now": it also forgets the keys kept on this device; idle and tab-close locks only
+// drop the passphrase key and, when nothing is kept, the signing keys
+export function lock(forget = false) {
+  const was = isUnlocked();
+  if (forget || !remembered()) { wipe(); restored = false; if (forget) forgetSealed(); }
+  else restored = keys.size > 0;
+  aes = null;
+  if (was !== isUnlocked() || forget) emit('vault', state());
+}
 
-async function add(sk, name) {
+async function add(sk, name, onSecret) {
   const W = web3(), id = W.Keypair.fromSecretKey(sk).publicKey.toBase58();
   if (await getRec(id)) { sk.fill(0); throw new Error('That wallet is already in this browser.'); }
   const n = (await list()).length + 1, label = String(name || '').trim().slice(0, 32) || `Wallet ${n}`;
   const box = await seal(aes, sk, id);
   await write((s) => s.put({ id, v: 1, name: label, created: Date.now(), ...box }));
-  keys.set(id, sk); touch(); emit('vault', state());
+  onSecret?.(sk);
+  keys.set(id, await holdKey(sk)); touch(); keepSealed(); emit('vault', state());
   return { id, address: id, name: label };
 }
 // new random keypair; the result carries `secret` (base58) to show ONCE, then forget
 export async function create(name) {
   need();
   const sk = web3().Keypair.generate().secretKey; // a copy we own
-  const w = await add(sk, name);
-  return { ...w, secret: b58encode(sk) };
+  let secret = '';
+  const w = await add(sk, name, (b) => { secret = b58encode(b); }); // read once for the backup screen, before sealing zeroes it
+  return { ...w, secret };
 }
 // a base58 secret key (64 bytes, or a 32-byte seed), or a JSON byte array like a Solana CLI id.json
 function parseSecret(input) {
@@ -177,22 +242,37 @@ export async function rename(id, name) {
 export async function remove(id) {
   if (id === META) return;
   await write((s) => s.delete(id));
-  keys.get(id)?.fill(0); keys.delete(id);
+  drop(keys.get(id)); keys.delete(id); keepSealed();
   emit('vault', { ...state(), removed: id });
 }
 // forgot the passphrase: erase every local wallet and the passphrase (the UI demands a typed confirmation)
 export async function erase() {
-  lock();
+  lock(true);
   await write((s) => s.clear());
   emit('vault', { ...state(), erased: true });
 }
-// a Keypair for an unlocked local wallet, or null. Not exported: wallet.js claims it once with claimSigner() when it
-// loads, so no other module can get a key to sign arbitrary bytes or read it; every signature goes through wallet.js,
-// which simulates and checks the transaction first (txcheck.js).
+// A signer for an unlocked local wallet, or null: {address, sign(messageBytes) → Promise<Uint8Array(64)>}. It never
+// exposes key bytes. Not exported: wallet.js claims it once with claimSigner() when it loads, so no other module can
+// get one to sign arbitrary bytes; every signature goes through wallet.js, which simulates and checks the transaction
+// first (txcheck.js).
 function keypairFor(address) {
-  const sk = aes && keys.get(address);
-  if (!sk) return null; // signing is not user activity: it never postpones the auto-lock
-  return web3().Keypair.fromSecretKey(sk, { skipValidation: true });
+  const e = isUnlocked() && keys.get(address);
+  if (!e) return null; // signing is not user activity: it never postpones the auto-lock
+  return Object.freeze({
+    address,
+    async sign(message) {
+      const now = isUnlocked() && keys.get(address); // locked (or removed) since: refuse
+      if (!now) throw new Error('Your local wallets are locked.');
+      if (now.key) return new Uint8Array(await crypto.subtle.sign('Ed25519', now.key, message));
+      return signRaw(web3().Keypair.fromSecretKey(now.raw, { skipValidation: true }), message);
+    },
+  });
+}
+// fallback for browsers without WebCrypto Ed25519: let web3.js sign a throwaway copy of the message
+function signRaw(kp, message) {
+  const W = web3(), tx = new W.VersionedTransaction(W.VersionedMessage.deserialize(message));
+  tx.sign([kp]);
+  return tx.signatures[0];
 }
 let claimed = false;
 export function claimSigner() {
@@ -207,9 +287,10 @@ export const autoLockMin = () => { const m = Number(LS.get('vault.autolock', 15)
 export function setAutoLock(min) { LS.set('vault.autolock', AUTOLOCK.includes(Number(min)) ? Number(min) : 15); touch(); }
 function touch() { lastActive = Date.now(); }
 const idleCheck = () => { if (aes && Date.now() - lastActive > autoLockMin() * 60000) lock(); };
+if (typeof window !== 'undefined') whenReady();
 if (typeof window !== 'undefined') {
   for (const e of ['pointerdown', 'keydown', 'wheel', 'touchstart']) addEventListener(e, touch, { passive: true, capture: true });
   setInterval(idleCheck, 20000);
   document.addEventListener('visibilitychange', idleCheck); // timers sleep with the laptop; check on return
-  addEventListener('pagehide', lock);
+  addEventListener('pagehide', () => lock());
 }

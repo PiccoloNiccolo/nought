@@ -1,11 +1,13 @@
 // Visible rows get first access to the image budget; nearby rows warm the cache.
 // Cached thumbnails bypass networking. A second host races a slow first one after 250ms.
-import { esc, on } from '../core/util.js';
+import { esc, on, emit } from '../core/util.js';
 import { imageSources } from '../core/jup.js';
-import { tokens } from '../core/store.js';
+import { tokens, upsert } from '../core/store.js';
 import { wantDex, wantMeta } from '../core/meta.js';
+import { wantUri } from '../core/chain-meta.js';
 import { ImageQueue } from './image-queue.js';
-import { imageCache, loadImage, fastImageHost } from './image-cache.js';
+import { imageCache, loadImage, fastImageHost, imageTimeout } from './image-cache.js';
+import { PumpImages } from './pump-image.js';
 
 const states = new WeakMap(), enrichment = new Map(), hints = new Map(), elements = new Map(), incoming = new Map();
 const TTL = 60000, HINT_KEY = 'nought.image-sources.v1'; let saveTimer = 0;
@@ -18,7 +20,7 @@ function rememberSource(key, url) {
   remember(hints, key, { url, at: Date.now() }, 250);
   if (!saveTimer) saveTimer = setTimeout(() => { saveTimer = 0; try { localStorage.setItem(HINT_KEY, JSON.stringify([...hints])); } catch { /* disposable hints */ } }, 1000);
 }
-const queue = new ImageQueue({ load: loadImage, limit: 16, hostLimit: host => fastImageHost(host) ? 8 : 4, backgroundPriority: 10000, reserve: 4, hostReserve: 2, hedge: 250 });
+const queue = new ImageQueue({ load: loadImage, limit: 16, hostLimit: host => fastImageHost(host) ? 8 : 4, timeoutFor: imageTimeout, backgroundPriority: 10000, reserve: 4, hostReserve: 2, hedge: 250 });
 let restored = false;
 function resumeImages() {
   restored = true;
@@ -26,14 +28,26 @@ function resumeImages() {
 }
 Promise.race([imageCache.ready, new Promise(resolve => setTimeout(resolve, 30))]).then(resumeImages);
 imageCache.ready.then(() => { if (restored) resumeImages(); });
+// pump.fun's CDN picture, checked from the moment a coin appears; ready bytes land in imageCache, then upsert wakes the rows
+const readData = blob => new Promise((resolve, reject) => { const file = new FileReader(); file.onload = () => resolve(file.result); file.onerror = reject; file.readAsDataURL(blob); });
+const pumps = typeof fetch === 'undefined' || typeof FileReader === 'undefined' ? null : new PumpImages({ fetch: (...a) => fetch(...a), cache: imageCache, readData, onReady: (mint, url) => { if (tokens.has(mint)) upsert(mint, { imagePump: url }); } });
+const watchPump = t => { if (t?.mint && !t.imagePump && !document.hidden) pumps?.watch(t.mint, t.created); };
 const cachedSource = urls => { for (const url of urls) { const display = imageCache.get(url); if (display) return { url, display }; } return null; };
-export const imageKey = (t) => JSON.stringify([t.imageOriginal, t.image, t.imageAlt]);
+export const imageKey = (t) => JSON.stringify([t.imagePump, t.imageOriginal, t.image, t.imageAlt]);
 export function tokenImage(t, width = 128) {
   const urls = imageSources(t, width);
   // Assign saved rasters directly to the node in register(). Encoding them into
   // every price-update HTML string wastes parsing work and duplicates large data.
   return `<img class="token-image" alt="" decoding="async" referrerpolicy="no-referrer" data-token-image="${esc(t.mint || '')}" data-sources="${esc(JSON.stringify(urls))}" width="${width}" height="${width}">`;
 }
+// Coins whose picture is loaded or saved, so Pulse can show a brand-new row together with its picture.
+const ready = new Set();
+function markReady(mint) {
+  if (!mint || ready.has(mint)) return;
+  ready.add(mint); if (ready.size > 3000) ready.delete(ready.values().next().value);
+  emit('token-image-ready', mint);
+}
+export const imageReady = t => !!t?.mint && (ready.has(t.mint) || !!cachedSource(imageSources(t, 128)));
 function forgetIncoming(mint) {
   const entry = incoming.get(mint); if (!entry) return;
   clearTimeout(entry.timer); entry.request?.cancel(); incoming.delete(mint);
@@ -42,17 +56,19 @@ function warmIncoming(t) {
   const entry = incoming.get(t.mint); if (!entry || document.hidden) return;
   const urls = imageSources(t, 128), key = JSON.stringify(urls);
   if (!urls.length || entry.key === key) return;
-  if (cachedSource(urls)) { forgetIncoming(t.mint); return; }
+  if (cachedSource(urls)) { forgetIncoming(t.mint); markReady(t.mint); return; }
   entry.request?.cancel(); entry.key = key;
-  entry.request = queue.request(key, urls, url => { rememberSource(key, url); forgetIncoming(t.mint); }, () => forgetIncoming(t.mint), 8000);
+  // A held new row waits for this picture, so it outranks images already on screen below the fold.
+  entry.request = queue.request(key, urls, url => { rememberSource(key, url); forgetIncoming(t.mint); markReady(t.mint); }, () => forgetIncoming(t.mint), 50);
 }
 // Pulse calls this only for incoming coins that pass the visible column's filters.
-// At most two speculative subscribers share the same bounded queue as displayed rows.
+// At most eight speculative subscribers (about the launches of the last few seconds) share the bounded queue.
 export function primeTokenImage(t) {
   if (!t?.mint || document.hidden || incoming.has(t.mint)) return;
-  while (incoming.size >= 2) forgetIncoming(incoming.keys().next().value);
+  watchPump(t);
+  while (incoming.size >= 8) forgetIncoming(incoming.keys().next().value);
   incoming.set(t.mint, { request: null, key: '', timer: setTimeout(() => forgetIncoming(t.mint), 8000) });
-  if (!imageSources(t, 128).length && t.uri) wantMeta(t, { priority: true });
+  if (!imageSources(t, 128).length) t.uri ? wantMeta(t, { priority: true }) : wantUri(t.mint);
   warmIncoming(t);
 }
 export function syncTokenImage(im, t) {
@@ -63,15 +79,25 @@ export function syncTokenImage(im, t) {
   const previous = s.urls;
   s.urls = urls; s.key = key; im.dataset.sources = key; s.rounds = 0; s.metadataRounds = 0;
   if (im.dataset.loaded && urls.includes(im.dataset.imageSource)) return;
-  // An added fallback must not restart a download already in progress.
-  if (s.request && previous.length && previous.every(url => urls.includes(url))) return;
+  // An added fallback must not restart a download already in progress; a new first choice (pump.fun's CDN) does.
+  if (s.request && previous.length && previous.every(url => urls.includes(url)) && previous.includes(urls[0])) return;
   s.request?.cancel(); s.request = null; delete im.dataset.loaded; delete im.dataset.failed;
   if (s.near) start(im);
+}
+// Socials (X, website, Telegram) live in the coin's metadata. Jupiter often has a picture but no socials and no URI,
+// so a coin on screen without any socials gets its metadata read once (its URI found on-chain first if needed).
+const detailsAsked = new Set();
+function wantDetails(mint) {
+  const t = tokens.get(mint);
+  if (!t || t.twitter || t.website || t.telegram || detailsAsked.has(mint)) return;
+  detailsAsked.add(mint); if (detailsAsked.size > 5000) detailsAsked.delete(detailsAsked.values().next().value);
+  if (t.uri) wantMeta(t); else wantUri(mint);
 }
 function enrich(mint) {
   if (!mint || Date.now() - (enrichment.get(mint) || 0) < TTL) return;
   remember(enrichment, mint, Date.now()); wantDex(mint);
-  const t = tokens.get(mint); if (t?.uri) wantMeta(t, { priority: true });
+  // No URI in the feed: read it from the chain, then metadata supplies the picture.
+  const t = tokens.get(mint); if (t?.uri) wantMeta(t, { priority: true }); else wantUri(mint);
 }
 function priority(im) {
   if (im.closest?.('.hv-pop')) return -1000;
@@ -85,12 +111,14 @@ function visible(im) {
 }
 function display(im, s, url, src, cached = false) {
   s.request?.cancel(); s.request = null; clearTimeout(s.enrichTimer);
+  markReady(im.dataset.tokenImage);
   im.dataset.imageSource = url; im.dataset.imageCache = cached ? 'saved' : 'download'; im.src = src || url; im.dataset.loaded = 'true'; delete im.dataset.failed; observer?.unobserve(im);
 }
 function start(im) {
   const s = states.get(im); if (!s || im.dataset.loaded || !im.isConnected || document.hidden) return;
   const cached = cachedSource(s.urls);
   if (cached) { display(im, s, cached.url, cached.display, true); return; }
+  watchPump(tokens.get(im.dataset.tokenImage));
   if (s.request) { s.request.priority(priority(im)); return; }
   // Missing artwork should request metadata immediately, not sit in an image queue.
   if (!s.urls.length) { im.dataset.failed = 'true'; s.failedAt = Date.now(); s.rounds++; enrich(im.dataset.tokenImage); return; }
@@ -113,7 +141,7 @@ const observer = typeof IntersectionObserver === 'undefined' ? null : new Inters
   // Batch first, then the queue sorts across all columns by on-screen position.
   for (const e of entries) {
     const s = states.get(e.target); if (!s) continue; s.near = e.isIntersecting;
-    if (e.isIntersecting) start(e.target);
+    if (e.isIntersecting) { start(e.target); wantDetails(e.target.dataset.tokenImage); }
     else { s.request?.cancel(); s.request = null; clearTimeout(s.enrichTimer); }
   }
 }, { rootMargin: '180px' });
@@ -135,7 +163,7 @@ function register(im) {
     start(im);
   });
   if (observer) observer.observe(im);
-  if (near) start(im); // visible/cached artwork does not wait for the next observer frame
+  if (near) { start(im); wantDetails(mint); } // visible/cached artwork does not wait for the next observer frame
 }
 function scan(root) {
   if (root.matches?.('[data-token-image]')) register(root);
@@ -156,6 +184,8 @@ if (typeof document !== 'undefined') {
     warmIncoming(t);
   });
   on('route', () => { for (const mint of incoming.keys()) forgetIncoming(mint); });
+  // Every launch starts its CDN check at once, before its row exists.
+  on('new-token', watchPump);
   scan(document);
   new MutationObserver(records => {
     for (const record of records) {

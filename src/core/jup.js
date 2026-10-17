@@ -13,8 +13,9 @@
 //                                                        → {sol, lamports, tokens: {mint: {raw, ui, dec, frozen, program, accounts}}}
 //   ju.shield(mints)        JU ultra/v1/shield            → {mint: [{type, message, severity}]}
 //   jg.gems(body)           JG POST datapi pools/gems     → {recent: [Token], aboutToGraduate: [Token], graduated: [Token]}
-//   jx.txs(mint, {trader, offset})  JX datapi txs, 30 per page, newest first → {txs: [Tx], next} (pass next as offset)
-//   jh.holders(mint)        JH datapi holders (top 100)   → {count, holders: [Holder]}
+//   jx.txs(mint, {trader, offset, categories, tags})  JX datapi txs, 30 per page, newest first → {txs: [Tx], next} (pass next as offset;
+//                           categories: 'influencer' = KOL trades only, tags: 'sniper' | 'insider' | 'bundler' = that holder tag only)
+//   jh.holders(mint)        JH datapi holders (top 100)   → {count, holders: [Holder]} (rebuilt from trades, fromTrades: true, while Jupiter hasn't indexed a new coin)
 //   jc.chart(mint, {interval, to, candles, type, quote})  JC datapi v2 charts → [{time (s), open, high, low, close, volume}]
 //   ds.tokens(mints) → Map(mint → best pair) · ds.pairs(mint) → [pair] · ds.search(q) → [pair] (Solana only)
 //   ds.boosts('top'|'latest') · ds.profiles() · ds.ctos() → [Promo] · ds.orders(mint) → {paid, orders, boosts} (cached 10 min)
@@ -260,6 +261,7 @@ export function img(u, w = 128) {
   }
   return s;
 }
+const PUMP_CDN = 'https://d39w9554j5ohjb.cloudfront.net/coin-image/';
 export const imgFallback = (u) => { const c = cidPath(u); return c ? safeUrl(GATEWAYS[1] + c) : ''; };
 
 // Keep the provider's original URL as well as resized IPFS variants. Some CIDs
@@ -269,6 +271,8 @@ export function imageSources(t, width = 160) {
   const add = (u) => { const s = safeUrl(u).replace(/^http:/, 'https:'); if (!s) return; const url = new URL(s); if (!url.username && !url.password && !NO_HOTLINK.test(url.hostname) && !sources.includes(s)) sources.push(s); };
   // A second provider's image is more useful than repeatedly resizing a failed
   // first provider. Try each primary variant before the slower raw gateways.
+  // pump.fun's CDN copy, set once token-image.js has seen the real picture there (see ui/pump-image.js)
+  if (typeof t.imagePump === 'string' && t.imagePump.startsWith(PUMP_CDN)) { if (width > 128) add(t.imagePump.replace('variant=128x128', 'variant=256x256')); add(t.imagePump); }
   for (const u of [t.imageOriginal, t.image, t.imageAlt]) if (u) add(img(u, width));
   for (const u of [t.imageOriginal, t.imageAlt, t.image]) {
     if (!u) continue;
@@ -420,32 +424,65 @@ export const jg = {
 export const jx = {
   async txs(mint, opts) {
     if (!isMint(mint)) throw new Error('Not a token address');
-    const { trader, offset } = opts && typeof opts === 'object' ? opts : {};
+    const { trader, offset, categories, tags } = opts && typeof opts === 'object' ? opts : {};
     const q = new URLSearchParams(); if (isMint(trader)) q.set('traderAddress', trader); if (offset) q.set('offset', String(offset));
+    // Jupiter filters the feed server side: categories=influencer (KOL trades only), tags=sniper|insider|bundler
+    if (/^[a-z_]{1,24}$/.test(categories || '')) q.set('categories', categories);
+    if (/^[a-z_]{1,24}$/.test(tags || '')) q.set('tags', tags);
     const j = obj(await data(`/v1/txs/${mint}${String(q) ? '?' + q : ''}`, {}, { prio: prioOf(opts) }), 'trades');
     const txs = arr(j.txs, 'trades').filter((x) => x && SIG_RE.test(x.txHash) && isMint(x.traderAddress) && (!x.asset || x.asset === mint)).map((x) => ({
       id: String(x.actionId || x.txHash).slice(0, 120), sig: x.txHash, mint, side: x.type === 'sell' ? 'sell' : 'buy', wallet: x.traderAddress,
       tokens: n(x.amount) || 0, sol: n(x.nativeVolume) || 0, usd: n(x.usdVolume) || 0, priceUsd: n(x.usdPrice) || 0, at: ms(x.timestamp) || 0,
       pool: isMint(x.poolId) ? x.poolId : undefined, mev: !!x.isMev, tags: Array.isArray(x.holderTags) ? x.holderTags.filter((s) => typeof s === 'string').slice(0, 10) : [],
+      // Jupiter's own wallet labels ('influencer' = a KOL, 'whale', ...); Nought never guesses who owns a wallet
+      cats: Array.isArray(x.walletCategories) ? x.walletCategories.filter((s) => typeof s === 'string' && /^[a-z_]{1,24}$/.test(s)).slice(0, 6) : [],
     }));
     return { txs, next: j.next ? String(j.next) : null };
   },
 };
 
 // ---- JH: top 100 holders with owners resolved ----
+// Jupiter indexes a coin's holders a few minutes after launch: until then /v1/holders answers count 0 and an empty list
+// although the coin already has holders (checked 2026-10-17 on coins 5-12 s old). For those the list is rebuilt from the
+// coin's trades: each wallet's tokens bought minus sold (transfers are not seen, so it is an estimate; fromTrades marks
+// it). Built once from up to 12 pages, then each refresh reads only trades newer than the last one seen.
+const HOLDER_POOL = /pool|amm|curve|vault/i; // the same test the Holders tab uses to hide pools
+const TRADE_HOLD = new Map(); // mint → {seen: Set(trade id), pos: Map(wallet → tokens), complete}
+async function holdersFromTrades(mint, opts) {
+  let c = TRADE_HOLD.get(mint);
+  if (!c) { c = { seen: new Set(), pos: new Map(), complete: false }; TRADE_HOLD.set(mint, c); if (TRADE_HOLD.size > 30) TRADE_HOLD.delete(TRADE_HOLD.keys().next().value); }
+  const fresh = [], first = !c.seen.size;
+  let next = null;
+  for (let page = 0; page < (first ? 12 : 4); page++) {
+    const { txs, next: more } = await jx.txs(mint, { prio: prioOf(opts), ...(next ? { offset: next } : {}) });
+    let known = false;
+    for (const x of txs) { if (c.seen.has(x.id)) { known = true; break; } fresh.push(x); }
+    if (known || !more || !txs.length) { if (first && (!more || !txs.length)) c.complete = true; break; }
+    next = more;
+  }
+  for (const x of fresh) { c.seen.add(x.id); c.pos.set(x.wallet, (c.pos.get(x.wallet) || 0) + (x.side === 'buy' ? x.tokens : -x.tokens)); }
+  const held = [...c.pos].filter(([, a]) => a > 0).sort((a, b) => b[1] - a[1]);
+  return { count: held.length, fromTrades: true, complete: c.complete, holders: held.slice(0, 100).map(([wallet, amount]) => ({ wallet, amount, sol: null, tags: [], labels: [], funding: null })) };
+}
 export const jh = {
   async holders(mint, opts) {
     if (!isMint(mint)) throw new Error('Not a token address');
     const j = obj(await data('/v1/holders/' + mint, {}, { prio: prioOf(opts) }), 'holders');
-    return {
-      count: n(j.count) || 0,
-      holders: arr(j.holders, 'holders').filter((h) => isMint(h?.address)).map((h) => ({
+    const holders = arr(j.holders, 'holders').filter((h) => isMint(h?.address)).map((h) => ({
         wallet: h.address, amount: n(h.amount) || 0, sol: n(h.solBalanceDisplay) ?? (n(h.solBalance) || 0) / 1e9,
         tags: Array.isArray(h.holderTags) ? h.holderTags.filter((s) => typeof s === 'string') : [],
         labels: Array.isArray(h.tags) ? h.tags.map((x) => ({ id: String(x?.id || ''), name: String(x?.name || '') })) : [],
         funding: isMint(h.addressInfo?.fundingAddress) ? { from: h.addressInfo.fundingAddress, amount: n(h.addressInfo.fundingAmount) || 0, tx: SIG_RE.test(h.addressInfo.fundingTx) ? h.addressInfo.fundingTx : undefined, at: ms(h.addressInfo.fundingBlockTime), slot: n(h.addressInfo.fundingSlot) } : null,
-      })),
-    };
+      }));
+    // not (fully) indexed yet: in a coin's first minutes Jupiter lists nothing, only the launchpad's pool (the bonding
+    // curve), or a few of the wallets. Below 10 real holders, merge in the wallets rebuilt from trades (Jupiter's rows,
+    // with their labels and funding, win).
+    if (holders.filter((h) => !h.labels.some((l) => HOLDER_POOL.test(l.id + ' ' + l.name))).length < 10) {
+      const t = await holdersFromTrades(mint, opts), have = new Set(holders.map((h) => h.wallet));
+      const all = [...holders, ...t.holders.filter((h) => !have.has(h.wallet))].sort((x, y) => y.amount - x.amount);
+      if (all.length > holders.length) return { ...t, count: Math.max(n(j.count) || 0, all.length), holders: all.slice(0, 100) };
+    }
+    return { count: n(j.count) || 0, holders };
   },
 };
 

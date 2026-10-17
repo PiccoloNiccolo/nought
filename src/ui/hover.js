@@ -35,7 +35,7 @@ function candles(bars) {
   const W = 276, H = 78, n = bars.length, lo = Math.min(...bars.map((b) => b.low)), hi = Math.max(...bars.map((b) => b.high)), span = hi - lo || hi || 1;
   const y = (v) => (H - 4 - ((v - lo) / span) * (H - 8)).toFixed(1), step = W / Math.max(n, 30), bw = Math.max(1.5, step * 0.62), x0 = W - n * step; // newest candle at the right edge
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" aria-hidden="true">${bars.map((b, i) => {
-    const x = (x0 + i * step + step / 2).toFixed(1), up = b.close >= b.open, c = up ? 'var(--up)' : 'var(--down)', top = y(Math.max(b.open, b.close)), bot = y(Math.min(b.open, b.close));
+    const x = (x0 + i * step + step / 2).toFixed(1), up = b.close >= b.open, c = up ? 'var(--chart-up, var(--up))' : 'var(--chart-down, var(--down))', top = y(Math.max(b.open, b.close)), bot = y(Math.min(b.open, b.close));
     return `<line x1="${x}" x2="${x}" y1="${y(b.high)}" y2="${y(b.low)}" stroke="${c}" stroke-width="1"/><rect x="${(x - bw / 2).toFixed(1)}" y="${top}" width="${bw.toFixed(1)}" height="${Math.max(1, bot - top).toFixed(1)}" fill="${c}"/>`;
   }).join('')}</svg>`;
 }

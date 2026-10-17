@@ -12,6 +12,7 @@ import { tokens, upsert, all } from '../core/store.js';
 import { gecko, eachPool } from '../core/seed.js';
 import { avatar, socials, qbButton, lpInfo, LP } from '../ui/card.js';
 import { sparkCell, sparkWatcher } from '../ui/sparkline.js';
+import { edgeFade } from '../ui/edge-fade.js';
 import { watchlist, watchMints, toggleWatch } from '../core/watchlist.js';
 import { parseAmt, pairToken, nn } from './watch.js';
 
@@ -143,6 +144,7 @@ const M = {
   surge: (r) => r.surge?.n ?? null,
   promo: (r) => r.promo?.total ?? null,
 };
+const MIN_FEES = 5, MAX_MC = 5e6; // SOL of fees traders paid; USD market cap
 const FKEYS = ['mcMin', 'mcMax', 'liqMin', 'liqMax', 'volMin', 'volMax', 'txMin', 'orgMin', 't10Max'];
 const activeFilters = () => FKEYS.filter((k) => parseAmt(P.f[k]) != null).length + (P.f.lps.length ? 1 : 0) + (P.f.paid ? 1 : 0) + (P.f.auth ? 1 : 0);
 
@@ -152,6 +154,8 @@ function applyFilters(rows, tab, tf) {
   const rng = (x, lo, hi) => (lo == null && hi == null) || (x != null && (lo == null || x >= lo) && (hi == null || x <= hi));
   return rows.filter((r) => {
     const t = r.t;
+    // Discover only lists coins with real activity and room to run: at least MIN_FEES SOL paid in fees, at most MAX_MC
+    if (!(Number(t.fees) >= MIN_FEES) || t.mcUsd > MAX_MC) return false;
     if ((tab.kind || tab.id === 'surge') && !P.majors && !t.launchpad && !r.gt) return false; // GeckoTerminal rows don't say
     if (q && !(t.symbol || '').toLowerCase().includes(q) && !(t.name || '').toLowerCase().includes(q) && !t.mint.toLowerCase().startsWith(q)) return false;
     if (f.lps.length && !f.lps.includes(t.launchpad || '')) return false;
@@ -176,19 +180,31 @@ function sortRows(rows, tab, tf) {
 }
 
 const fx = (n) => (n >= 10 ? n.toFixed(0) : n >= 1 ? n.toFixed(1) : n >= 0.01 ? n.toFixed(2) : '0');
+// token-info icons: each figure in the Token info column carries one, and the column header names them
+const tiSvg = (p) => `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
+const TI = {
+  top10: tiSvg('<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6M18 14.4c1.5.7 2.4 2.2 2.6 4.6"/>'),
+  dev: tiSvg('<path d="M7 11.5V19h10v-7.5"/><path d="M7 11.5a3.5 3.5 0 0 1-.6-6.9A4.6 4.6 0 0 1 12 3a4.6 4.6 0 0 1 5.6 1.6 3.5 3.5 0 0 1-.6 6.9"/><path d="M7 15.5h10"/>'),
+  org: tiSvg('<path d="M5 19c0-8 5-13 14-14-1 9-6 14-14 14Z"/><path d="m5 19 8-8"/>'),
+  safe: tiSvg('<path d="M12 3 5 6v5.5c0 4.2 2.9 7.6 7 9.5 4.1-1.9 7-5.3 7-9.5V6l-7-3Z"/><path d="m9 12 2.2 2.2L15.5 10"/>'),
+  risk: tiSvg('<path d="M12 3 5 6v5.5c0 4.2 2.9 7.6 7 9.5 4.1-1.9 7-5.3 7-9.5V6l-7-3Z"/><path d="M12 8.5v4M12 15.5v.01"/>'),
+  paid: tiSvg('<circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.2c-.5-.9-1.5-1.4-2.8-1.4-1.6 0-2.7.8-2.7 2s1.1 1.7 2.7 2.1 2.8.9 2.8 2.2-1.2 2.1-2.8 2.1c-1.4 0-2.4-.5-2.9-1.5M12 6.3v1.5M12 16.2v1.5"/>'),
+};
 function pills(t) {
-  const out = [], p = (txt, k, title) => out.push(`<span class="pl ${k}" title="${esc(title)}">${txt}</span>`);
-  if (t.top10Pct != null) p(`T10 ${fx(t.top10Pct)}%`, t.top10Pct > 35 ? 'bad' : t.top10Pct > 20 ? 'mid' : 'ok', `The top 10 holders own ${t.top10Pct.toFixed(1)}% of the supply`);
-  if (t.devPct != null) p(`Dev ${fx(t.devPct)}%`, t.devPct > 10 ? 'bad' : t.devPct > 3 ? 'mid' : 'ok', `The creator holds ${t.devPct.toFixed(2)}% of the supply`);
-  if (t.organicScore != null) p(`Org ${Math.round(t.organicScore)}`, t.organicScore >= 60 ? 'ok' : t.organicScore >= 30 ? 'mid' : 'bad', 'Jupiter organic score (0 to 100): how much activity looks like real people');
-  if (t.mintAuthDisabled === true && t.freezeAuthDisabled === true) p('Auth ✓', 'ok', 'Mint and freeze authority are revoked');
+  const out = [], p = (ic, txt, k, title) => out.push(`<span class="pl ${k}" title="${esc(title)}">${TI[ic]}${txt}</span>`);
+  if (t.top10Pct != null) p('top10', `${fx(t.top10Pct)}%`, t.top10Pct > 35 ? 'bad' : t.top10Pct > 20 ? 'mid' : 'ok', `Top 10 holders: they own ${t.top10Pct.toFixed(1)}% of the supply`);
+  if (t.devPct != null) p('dev', `${fx(t.devPct)}%`, t.devPct > 10 ? 'bad' : t.devPct > 3 ? 'mid' : 'ok', `Dev: the creator holds ${t.devPct.toFixed(2)}% of the supply`);
+  if (t.organicScore != null) p('org', `${Math.round(t.organicScore)}`, t.organicScore >= 60 ? 'ok' : t.organicScore >= 30 ? 'mid' : 'bad', 'Jupiter organic score (0 to 100): how much activity looks like real people');
+  if (t.mintAuthDisabled === true && t.freezeAuthDisabled === true) p('safe', 'Auth', 'ok', 'Mint and freeze authority are revoked');
   else {
-    if (t.mintAuthDisabled === false) p('Mint', 'bad', 'Mint authority is on: more coins can be created');
-    if (t.freezeAuthDisabled === false) p('Freeze', 'bad', 'Freeze authority is on: holders can be frozen');
+    if (t.mintAuthDisabled === false) p('risk', 'Mint', 'bad', 'Mint authority is on: more coins can be created');
+    if (t.freezeAuthDisabled === false) p('risk', 'Freeze', 'bad', 'Freeze authority is on: holders can be frozen');
   }
-  if (t.dexPaid) p('DEX', 'acc', 'Someone paid Dexscreener for a profile, ad or boost');
+  if (t.dexPaid) p('paid', 'Paid', 'acc', 'Dex paid: someone paid Dexscreener for a profile, ad or boost');
   return out.join('') || '<span class="dim">—</span>';
 }
+// the coin picture in a frame tinted with its launchpad's colour, as on the Pulse cards
+const framed = (t) => { const lp = lpInfo(t.launchpad); return `<span class="pc-av"${lp ? ` style="--lp:${esc(lp.color)}"` : ''}>${avatar(t, 'sm')}</span>`; };
 const starBtn = (mint, on, ph = false) => `<button class="dsc-star${ph ? ' ph' : ''}${on ? ' on' : ''}" data-star="${esc(mint)}" aria-pressed="${on}" title="${on ? 'Remove from' : 'Add to'} watchlist" style="--f:${on ? 'var(--warn)' : 'none'}">${ICON.star}</button>`;
 const clockTxt = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -200,7 +216,7 @@ function rowHtml(r, tab, tf, watched, flash) {
     ? `<td class="c-sg" title="${r.surge.live ? `Surging since ${esc(clockTxt(r.surge.first))}` : 'Stopped qualifying: listed, dimmed, for up to 10 minutes'}"><span class="sg-x${r.surge.n >= 6 ? ' hot' : ''}${r.surge.live ? '' : ' cool'}">×${r.surge.n.toFixed(1)}</span>${r.surge.live ? (sgFor ? `<small>for <span data-age="${r.surge.first}">${agoTxt(r.surge.first)}</span></small>` : '') : '<small>cooling</small>'}</td>`
     : tab.id === 'boosted' ? `<td class="c-pr">${r.promo.src.map((s) => `<span class="pr pr-${s}">${PROMO[s]}</span>`).join('')}${r.promo.total ? `<small title="Active boost units on Dexscreener">${int(r.promo.total)} boosts</small>` : ''}</td>` : '';
   return `<tr data-mint="${esc(t.mint)}" class="${flash ? 'fresh' : ''}${tab.id === 'surge' && !r.surge.live ? ' cool' : ''}">
-    <td class="c-pair"><div class="pc">${avatar(t, 'sm')}<div class="pc-t">
+    <td class="c-pair"><div class="pc">${framed(t)}<div class="pc-t">
       <div class="pc-1"><b class="pc-sym">${esc(t.symbol || short(t.mint))}</b><span class="pc-nm">${esc(t.name || '')}</span><button class="copy" data-copy="${esc(t.mint)}" title="Copy address">${ICON.copy}</button>${starBtn(t.mint, watched.has(t.mint), true)}</div>
       <div class="pc-2">${t.created ? `<span class="age" data-age="${t.created}">${agoTxt(t.created)}</span>` : ''}${t.launchpad ? `<span class="pc-lp">${esc(lpName(t.launchpad))}</span>` : ''}${soc ? `<span class="soc">${soc}</span>` : ''}</div>
     </div></div></td>
@@ -211,11 +227,13 @@ function rowHtml(r, tab, tf, watched, flash) {
     <td class="n c-vol">${usd(st?.vol)}</td>
     <td class="n c-tx">${st ? `<b>${int((st.buys || 0) + (st.sells || 0))}</b><small><span class="up">${int(st.buys || 0)}</span>/<span class="down">${int(st.sells || 0)}</span></small>` : '—'}</td>
     <td class="c-info"><div class="pls">${pills(t)}</div></td>
-    <td class="c-act"><div class="acts">${starBtn(t.mint, watched.has(t.mint))}${qbButton(t.mint)}</div></td>
+    <td class="c-act"><div class="acts">${starBtn(t.mint, watched.has(t.mint))}${qbFill(t.mint)}</div></td>
   </tr>`;
 }
 // a loading row in the table's own columns: picture and two lines, the 8h block, number blocks, badges, the buttons
-const skelRow = (tab) => `<tr class="sk" aria-hidden="true"><td class="c-pair"><div class="pc"><i class="skel sk-av"></i><div class="pc-t"><i class="skel sk-a"></i><i class="skel sk-b"></i></div></div></td>${tab.id === 'surge' || tab.id === 'boosted' ? `<td class="${tab.id === 'surge' ? 'c-sg' : 'c-pr'}"><i class="skel sk-n"></i></td>` : ''}<td class="c-spark"><i class="skel sk-sp"></i></td><td class="n c-mc"><i class="skel sk-n"></i><i class="skel sk-s"></i></td><td class="n c-liq"><i class="skel sk-n"></i></td><td class="n c-vol"><i class="skel sk-n"></i></td><td class="n c-tx"><i class="skel sk-n"></i><i class="skel sk-s"></i></td><td class="c-info"><i class="skel sk-pl"></i></td><td class="c-act"><div class="acts"><i class="skel sk-st"></i><i class="skel sk-qb"></i></div></td></tr>`;
+const skelRow = (tab) => `<tr class="sk" aria-hidden="true"><td class="c-pair"><div class="pc"><span class="pc-av"><i class="skel sk-av"></i></span><div class="pc-t"><i class="skel sk-a"></i><i class="skel sk-b"></i></div></div></td>${tab.id === 'surge' || tab.id === 'boosted' ? `<td class="${tab.id === 'surge' ? 'c-sg' : 'c-pr'}"><i class="skel sk-n"></i></td>` : ''}<td class="c-spark"><i class="skel sk-sp"></i></td><td class="n c-mc"><i class="skel sk-n"></i><i class="skel sk-s"></i></td><td class="n c-liq"><i class="skel sk-n"></i></td><td class="n c-vol"><i class="skel sk-n"></i></td><td class="n c-tx"><i class="skel sk-n"></i><i class="skel sk-s"></i></td><td class="c-info"><i class="skel sk-pl"></i></td><td class="c-act"><div class="acts"><i class="skel sk-st"></i><i class="skel sk-qb"></i></div></td></tr>`;
+// the quick buy as the shared solid pill (style.css .qb.fill), "⚡ 0.1 SOL"
+const qbFill = (m) => qbButton(m, undefined, 'l', true, true);
 function int(n) { n = Number(n) || 0; return Math.abs(n) < 1000 ? String(Math.round(n)) : num(n); }
 function agoTxt(ms) { const s = Math.max(0, Math.floor((Date.now() - ms) / 1000)); return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd'; }
 
@@ -226,14 +244,14 @@ function headHtml(tab, tf) {
   };
   const extra = tab.id === 'surge' ? `<th class="c-sg">${b('surge', 'Surge', 'Last 5 minutes of volume against the hourly pace')}</th>` : tab.id === 'boosted' ? `<th class="c-pr">${b('promo', 'Promotion', 'Paid Dexscreener promotion')}</th>` : '';
   return `<thead><tr>
-    <th class="c-pair">${b('age', 'Pair', 'Sort by age')}</th>${extra}
+    <th class="c-pair">${b('age', 'Pair info', 'Sort by age')}</th>${extra}
     <th class="c-spark" title="Price over the last 8 hours (15-minute bars)">8h</th>
-    <th class="n c-mc">${b('mc', 'MC')}<span class="sl">/</span>${b('chg', tf, `Price change, ${tf}`)}</th>
+    <th class="n c-mc">${b('mc', 'Market cap')}<span class="sl">/</span>${b('chg', tf, `Price change, ${tf}`)}</th>
     <th class="n c-liq">${b('liq', 'Liquidity')}</th>
-    <th class="n c-vol">${b('vol', 'Vol ' + tf)}</th>
+    <th class="n c-vol">${b('vol', 'Volume ' + tf)}</th>
     <th class="n c-tx">${b('txns', 'Txns ' + tf)}</th>
-    <th class="c-info">${b('top10', 'T10')}${b('dev', 'Dev')}${b('organic', 'Organic')}</th>
-    <th class="c-act"></th>
+    <th class="c-info">${b('top10', TI.top10 + 'Top 10', 'Share held by the top 10 holders')}${b('dev', TI.dev + 'Dev', 'Share the creator holds')}${b('organic', TI.org + 'Organic', 'Jupiter organic score')}</th>
+    <th class="c-act">Action</th>
   </tr></thead>`;
 }
 
@@ -269,7 +287,9 @@ register({
       <div class="dsc-tw" id="dsc-tw"></div>
     </div>`;
     const tw = $('#dsc-tw', view), sparks = sparkWatcher(tw);
-    { const nav = $('.dsc-tabs', view), on = $('.dsc-tabs a.on', view); if (on && on.offsetLeft + on.offsetWidth > nav.clientWidth) nav.scrollLeft = on.offsetLeft - 8; } // phones: show the open tab
+    // phones: scroll the open tab clear of the faded right edge
+    { const nav = $('.dsc-tabs', view), on = $('.dsc-tabs a.on', view); if (on) { const x = on.getBoundingClientRect().right - nav.getBoundingClientRect().left; if (x > nav.clientWidth - 44) nav.scrollLeft = x - nav.clientWidth + 52; } }
+    const stopFade = edgeFade($('.dsc-tabs', view));
 
     // toolbar
     function tools() {
@@ -297,6 +317,7 @@ register({
         : tab.id === 'boosted' ? '<b class="warn">Boosted = paid promotion.</b> These coins paid Dexscreener for boosts, a profile or a takeover listing. Payment says nothing about safety. Solana only.'
           : tab.id === 'overview' ? `<b>Sampled</b>, not market-wide: launches and migrations are counted from the live stream since you opened Nought (<span data-age="${OPENED}">${agoTxt(OPENED)}</span> ago); list sums add up Jupiter's top-100 trending, organic and most-traded coins for ${esc(tf)}.`
             : st.gt ? 'Jupiter is not answering right now, so this is GeckoTerminal\'s trending list (20 pools, no holder data) until it does.' : esc(tab.note);
+      if (tab.id !== 'overview') el.insertAdjacentHTML('beforeend', ` <span class="dim">Only coins with at least ${MIN_FEES} SOL in fees paid and a market cap up to ${usd(MAX_MC, 0)}.</span>`);
     }
     function filtersPanel() {
       const el = $('#dsc-filters', view);
@@ -324,7 +345,7 @@ register({
       const tf = tab.id === 'surge' ? '5m' : P.tf;
       if (!st.rows.length) {
         if (st.busy || (!st.at && !st.err)) tw.innerHTML = `<table class="dsc-t" aria-busy="true">${headHtml(tab, tf)}<tbody>${skelRow(tab).repeat(10)}</tbody></table>`;
-        else if (st.err) tw.innerHTML = `<div class="dsc-empty"><b>Could not load this list</b><span class="dim">${esc(st.err)}. Nought retries every ${tab.every / 1000} s.</span><button class="dsc-btn" data-retry>Try now</button></div>`;
+        else if (st.err) tw.innerHTML = `<div class="dsc-empty"><b>Could not load this list</b><span class="dim">${esc(String(st.err).replace(/[.\s]+$/, ''))}. Nought retries every ${tab.every / 1000} s.</span><button class="dsc-btn" data-retry>Try now</button></div>`;
         else tw.innerHTML = tab.id === 'surge' ? `<div class="dsc-empty"><span class="pulse-dot"></span><b>Nothing is surging right now</b><span class="dim">Checking every 10 s. Lower the thresholds above to see more.</span></div>`
           : '<div class="dsc-empty"><b>The list came back empty</b><span class="dim">Trying again shortly.</span></div>';
         return;
@@ -358,7 +379,7 @@ register({
         const rows = [...m].sort((a, b) => b[1].all - a[1].all || b[1].feed - a[1].feed);
         if (!rows.length) return `<div class="dsc-empty sm"><span class="pulse-dot"></span><span class="dim">No ${what} seen yet. They show up here as the stream reports them.</span></div>`;
         const max = Math.max(1, ...rows.map(([, x]) => Math.max(x.h1, x.feed)));
-        return `<table class="ov-t"><thead><tr><th>Launchpad</th><th class="n">5m</th><th class="n">1h</th><th class="n" title="Since you opened Nought">Since open</th><th class="n" title="Coins the Pulse feed saw in the last hour">Feed 1h</th><th class="bar"></th></tr></thead><tbody>${rows.map(([lp, x]) => `<tr><td${lp === 'unknown' ? ' class="dim"' : ''}>${esc(lpLabel(lp))}</td><td class="n">${x.m5}</td><td class="n">${x.h1}</td><td class="n"><b>${x.all}</b></td><td class="n dim">${x.feed}</td><td class="bar"><i style="width:${((Math.max(x.h1, x.feed) / max) * 100).toFixed(1)}%"></i></td></tr>`).join('')}</tbody></table>`;
+        return `<table class="ov-t"><thead><tr><th>Launchpad</th><th class="n">5m</th><th class="n">1h</th><th class="n" title="Since you opened Nought">Since open</th><th class="n" title="Coins the Scope feed saw in the last hour">Feed 1h</th><th class="bar"></th></tr></thead><tbody>${rows.map(([lp, x]) => `<tr><td${lp === 'unknown' ? ' class="dim"' : ''}>${esc(lpLabel(lp))}</td><td class="n">${x.m5}</td><td class="n">${x.h1}</td><td class="n"><b>${x.all}</b></td><td class="n dim">${x.feed}</td><td class="bar"><i style="width:${((Math.max(x.h1, x.feed) / max) * 100).toFixed(1)}%"></i></td></tr>`).join('')}</tbody></table>`;
       };
       // sums from the current top lists
       const seen = new Map();
@@ -388,7 +409,7 @@ register({
           <section class="ov-card"><h3>Migrations by launchpad</h3>${tbl(G, 'migrations')}</section>
           <section class="ov-card span"><h3>Top lists by launchpad · ${esc(tf)}</h3><div class="ov-scroll hfade">${lt}</div></section>
         </div>
-        <p class="ov-foot dim">The live stream reports pump.fun and LaunchLab launches; "Feed 1h" counts coins Nought's Pulse feed saw on every launchpad it covers. Counts reset when you reload.</p>
+        <p class="ov-foot dim">The live stream reports pump.fun and LaunchLab launches; "Feed 1h" counts coins Nought's Scope feed saw on every launchpad it covers. Counts reset when you reload.</p>
       </div>`;
     }
 
@@ -512,7 +533,7 @@ register({
       st.alive = false; st.seq++;
       timers.forEach(clearInterval); clearTimeout(qTimer); clearTimeout(fTimer);
       document.removeEventListener('visibilitychange', onVis);
-      offWatch();
+      offWatch(); stopFade();
       sparks.destroy();
     };
   },

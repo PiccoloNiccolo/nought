@@ -24,6 +24,8 @@ export const RANGES = [
   { k: 'mc', g: 'Market', label: 'Market cap', unit: '$', jg: 'Mcap', money: true, v: (t) => mcUsd(t) },
   { k: 'liq', g: 'Market', label: 'Liquidity', unit: '$', jg: 'Liquidity', money: true, v: (t) => t.liquidity },
   { k: 'vol', g: 'Market', label: 'Volume 24h', unit: '$', jg: 'Volume24h', money: true, v: (t) => t.volume24h ?? (t.volSol ? t.volSol * solUsd() : null) },
+  // fees: SOL the coin's traders have paid in fees so far (Jupiter's pools feed); filtered in the browser only
+  { k: 'fees', g: 'Market', label: 'Fees paid', unit: 'SOL', v: (t) => t.fees },
   { k: 'bonding', g: 'Market', label: 'Bonding curve', unit: '%', jg: 'BondingCurve', v: (t) => (t.migrated ? 100 : t.progress != null ? t.progress * 100 : null) },
   { k: 'holders', g: 'Activity', label: 'Holders', jg: 'HolderCount', int: true, v: (t) => t.holders },
   { k: 'txns', g: 'Activity', label: 'Transactions', unit: '24h', v: (t) => (Number(t.buys) || 0) + (Number(t.sells) || 0) },

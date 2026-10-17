@@ -30,8 +30,8 @@ test('one-hour stats never invent a zero five-minute change', async () => {
   assert.equal(t.stats5m, undefined); assert.equal(t.stats1h.priceChange, 20);
 });
 
-async function imageHarness(urls, cached = new Map(), initialVisible = false) {
-  const images = [], probes = [], timeouts = new Map(), io = [], dex = [], meta = [], handlers = new Map(); let nextId = 0;
+async function imageHarness(urls, cached = new Map(), initialVisible = false, uri = 'https://metadata.example/token.json') {
+  const images = [], probes = [], timeouts = new Map(), io = [], dex = [], meta = [], chain = [], handlers = new Map(); let nextId = 0;
   const later = (fn, ms) => { timeouts.set(++nextId, { fn, ms }); return nextId; };
   class FakeImage {
     constructor(i) { this.dataset = { tokenImage: 'mint' + i, sources: JSON.stringify(urls(i)) }; this.isConnected = true; this.handlers = {}; this.src = ''; this.naturalWidth = 0; this.visible = initialVisible; }
@@ -43,17 +43,17 @@ async function imageHarness(urls, cached = new Map(), initialVisible = false) {
   for (let i = 0; i < 8; i++) images.push(new FakeImage(i));
   class Queue extends ImageQueue { constructor(options) { super({ ...options, defer: queueMicrotask, later, cancelTimer: id => timeouts.delete(id) }); } }
   const { api } = await moduleAt('src/ui/token-image.js', {
-    '../core/util.js': { esc: String, on: (name, fn) => handlers.set(name, fn) }, '../core/jup.js': { imageSources: t => t.urls || [] }, './image-queue.js': { ImageQueue: Queue },
-    './image-cache.js': { imageCache: { ready: Promise.resolve(), get: u => cached.get(u), remove: u => cached.delete(u) }, fastImageHost: host => host === 'pump.mypinata.cloud', loadImage: (url, success, failure) => {
+    '../core/util.js': { esc: String, on: (name, fn) => handlers.set(name, fn), emit() {} }, '../core/jup.js': { imageSources: t => t.urls || [] }, './image-queue.js': { ImageQueue: Queue },
+    './image-cache.js': { imageCache: { ready: Promise.resolve(), get: u => cached.get(u), remove: u => cached.delete(u) }, fastImageHost: host => host === 'pump.mypinata.cloud', imageTimeout: () => 0, loadImage: (url, success, failure) => {
       const probe = { src: url, naturalWidth: 0, onload() { cached.set(url, url); success(url); }, onerror: failure }; probes.push(probe);
       return () => { probe.onload = null; probe.onerror = null; };
     } },
-    '../core/store.js': { tokens: new Map(images.map(i => [i.dataset.tokenImage, { uri: 'https://metadata.example/token.json' }])) },
-    '../core/meta.js': { wantDex: m => dex.push(m), wantMeta: t => meta.push(t) }
+    '../core/store.js': { tokens: new Map(images.map(i => [i.dataset.tokenImage, { uri }])), upsert() {} }, './pump-image.js': { PumpImages: class { watch() {} } },
+    '../core/meta.js': { wantDex: m => dex.push(m), wantMeta: t => meta.push(t) }, '../core/chain-meta.js': { wantUri: m => chain.push(m) }
   }, { document, innerHeight: 900, localStorage: { getItem: () => null, setItem() {} }, Image: class { constructor() { this.naturalWidth = 0; probes.push(this); } removeAttribute(k) { if (k === 'src') this.src = ''; } },
     IntersectionObserver: class { constructor(fn) { io.push(fn); } observe() {} unobserve() {} }, MutationObserver: class { observe() {} }, setTimeout: later, clearTimeout: id => timeouts.delete(id) });
   const settle = () => new Promise(resolve => setImmediate(resolve));
-  return { api, images, probes, timeouts, dex, meta, settle, emit: (name,t) => handlers.get(name)?.(t), reveal: async () => { images.forEach(i => i.visible = true); io[0](images.map(target => ({ target, isIntersecting: true }))); await settle(); } };
+  return { api, images, probes, timeouts, dex, meta, chain, settle, emit: (name,t) => handlers.get(name)?.(t), reveal: async () => { images.forEach(i => i.visible = true); io[0](images.map(target => ({ target, isIntersecting: true }))); await settle(); } };
 }
 test('thumbnails wait for visibility and obey the per-host budget', async () => {
   const h = await imageHarness(i => [`https://image.example/${i}.png`]);
@@ -66,6 +66,16 @@ test('missing pictures request metadata immediately without consuming image slot
   assert.equal(h.probes.length, 0); assert.equal(h.dex.length, 8); assert.equal(h.images[0].dataset.failed, 'true');
   h.api.retryTokenImages(false); assert.equal(h.dex.length, 8);
   h.api.retryTokenImages(); assert.equal(h.dex.length, 16);
+});
+test('missing pictures without a metadata URI ask the chain for one instead', async () => {
+  const h = await imageHarness(() => [], new Map(), false, null); await h.reveal();
+  // (both the picture and the socials ask; core/chain-meta.js asks each coin once)
+  assert.equal(h.probes.length, 0); assert.equal(h.meta.length, 0); assert.equal(new Set(h.chain).size, 8); assert.equal(h.dex.length, 8);
+});
+test('a coin on screen with a picture but no socials still gets its metadata read once', async () => {
+  const h = await imageHarness(i => [`https://image.example/${i}.png`], new Map(), false); await h.reveal();
+  assert.equal(h.meta.length, 8, 'each visible coin (has a URI, no socials) reads its metadata');
+  await h.reveal(); assert.equal(h.meta.length, 8, 'only once');
 });
 test('saved thumbnails bypass the network queue even when every host slot is occupied', async () => {
   const saved = 'data:image/png;base64,aGVsbG8=', cache = new Map([['https://image.example/7.png', saved]]);
@@ -119,7 +129,7 @@ test('metadata failures can retry after cooldown; alternate artwork preserves th
   const { api } = await moduleAt('src/core/meta.js', {
     './util.js': { safeUrl: x => x || '', getJson: async () => { calls++; if (calls === 1) throw new Error('temporary outage'); return { image: 'https://new.example/image.png' }; } },
     './store.js': { tokens, changed() {}, upsert: (m, patch) => { for (const [k, v] of Object.entries(patch)) if (v !== undefined) token[k] = v; } },
-    './jup.js': { ds: {}, cidPath: () => null, ipfs: x => x, img: x => x, imgFallback: () => '', GATEWAYS: [] }
+    './settings.js': { settings: {} }, './jup.js': { ds: {}, cidPath: () => null, ipfs: x => x, img: x => x, imgFallback: () => '', GATEWAYS: [] }
   }, { Date: Clock });
   const settle = () => new Promise(resolve => setImmediate(resolve));
   api.wantMeta(token); await settle(); assert.equal(calls, 1);
@@ -135,7 +145,7 @@ test('visible-token metadata starts without waiting for four busy background job
   const { api } = await moduleAt('src/core/meta.js', {
     './util.js': { safeUrl: x => x || '', getJson: u => { started.push(u); return new Promise(resolve => pending.push(resolve)); } },
     './store.js': { tokens, changed() {}, upsert() {} },
-    './jup.js': { ds: {}, cidPath: () => null, ipfs: x => x, img: x => x, imgFallback: () => '', GATEWAYS: [] }
+    './settings.js': { settings: {} }, './jup.js': { ds: {}, cidPath: () => null, ipfs: x => x, img: x => x, imgFallback: () => '', GATEWAYS: [] }
   });
   const token = i => ({ mint: 'token'+i, uri: 'https://host'+i+'.example/meta.json' });
   for (let i = 0; i < 6; i++) api.wantMeta(token(i));
@@ -152,7 +162,7 @@ test('a slow metadata gateway is raced after 250ms and the losing request is abo
   const { api } = await moduleAt('src/core/meta.js', {
     './util.js': { safeUrl: x => x || '', getJson: (url, opt) => new Promise(resolve => requests.push({url, signal: opt.signal, resolve})) },
     './store.js': { tokens: new Map([[mint, token]]), changed() {}, upsert: (m, patch) => patches.push(patch) },
-    './jup.js': { ds: {}, cidPath: () => 'cid', ipfs: (u, g) => g === 1 ? 'https://backup.test/meta' : 'https://primary.test/meta', img: x => x, imgFallback: () => '', GATEWAYS: [] }
+    './settings.js': { settings: {} }, './jup.js': { ds: {}, cidPath: () => 'cid', ipfs: (u, g) => g === 1 ? 'https://backup.test/meta' : 'https://primary.test/meta', img: x => x, imgFallback: () => '', GATEWAYS: [] }
   }, { setTimeout: (fn, ms) => { timers.set(++id, {fn,ms}); return id; }, clearTimeout: id => timers.delete(id) });
   const settle = () => new Promise(resolve => setImmediate(resolve));
   api.wantMeta(token); await settle(); assert.equal(requests.length, 1);
@@ -168,7 +178,7 @@ test('one missing metadata file does not suspend every new coin on its host', as
   const { api } = await moduleAt('src/core/meta.js', {
     './util.js': { safeUrl: x => x || '', getJson: async u => { started.push(u); throw new TypeError('unavailable file'); } },
     './store.js': { tokens: new Map(), changed() {}, upsert() {} },
-    './jup.js': { ds: {}, cidPath: () => null, ipfs: u => u, img: x => x, imgFallback: () => '', GATEWAYS: [] }
+    './settings.js': { settings: {} }, './jup.js': { ds: {}, cidPath: () => null, ipfs: u => u, img: x => x, imgFallback: () => '', GATEWAYS: [] }
   });
   api.wantMeta({mint:'first',uri:'https://same.test/missing'}); await new Promise(resolve => setImmediate(resolve));
   api.wantMeta({mint:'second',uri:'https://same.test/brand-new'}); await new Promise(resolve => setImmediate(resolve));
@@ -181,7 +191,7 @@ async function metadataHarness({ stored = null } = {}) {
   const { api } = await moduleAt('src/core/meta.js', {
     './util.js': { safeUrl: x => /^https?:\/\//.test(x || '') ? x : '', getJson: (url, opt) => new Promise((resolve, reject) => requests.push({url, resolve, reject, signal:opt.signal})) },
     './store.js': { tokens, changed() {}, upsert: (mint, patch) => { patches.push({mint,patch}); for (const [k,v] of Object.entries(patch)) if(v !== undefined) tokens.get(mint)[k] = v; } },
-    './jup.js': { ds: {}, cidPath: x => x?.includes('/ipfs/') ? x.split('/ipfs/')[1] : null, ipfs: (u,g=0) => u?.includes('/ipfs/') ? `https://${g ? 'backup' : 'primary'}.test/ipfs/${u.split('/ipfs/')[1]}` : u, img: x => x, imgFallback: () => '', GATEWAYS: [] }
+    './settings.js': { settings: {} }, './jup.js': { ds: {}, cidPath: x => x?.includes('/ipfs/') ? x.split('/ipfs/')[1] : null, ipfs: (u,g=0) => u?.includes('/ipfs/') ? `https://${g ? 'backup' : 'primary'}.test/ipfs/${u.split('/ipfs/')[1]}` : u, img: x => x, imgFallback: () => '', GATEWAYS: [] }
   }, { localStorage: {getItem:k=>storage.get(k), setItem:(k,v)=>storage.set(k,v)}, setTimeout:(fn,ms)=>{timeouts.set(++id,{fn,ms});return id},clearTimeout:i=>timeouts.delete(i) });
   return {api,requests,patches,tokens,timeouts,storage,settle:()=>new Promise(r=>setImmediate(r)),token(mint,uri='https://publisher.test/metadata') { const t={mint,uri};tokens.set(mint,t);return t; }};
 }
@@ -227,4 +237,89 @@ test('untrusted saved metadata rejects credential URLs and executable artwork',a
   const stored=JSON.stringify([{key:'https://publisher.test/metadata',until:Date.now()+10000,value:{image:'javascript:alert(1)',twitter:'https://name:password@x.com/example',website:'https://safe.test'}}]);
   const h=await metadataHarness({stored}),t=h.token('a');h.api.wantMeta(t);
   assert.equal(t.image,undefined);assert.equal(t.twitter,undefined);assert.equal(t.website,'https://safe.test');
+});
+
+test('unpinned IPFS metadata waits for the slow gateway without holding a queue slot', async () => {
+  const requests = [], timers = new Map(), tokens = new Map(); let id = 0;
+  const { api } = await moduleAt('src/core/meta.js', {
+    './util.js': { safeUrl: x => x || '', getJson: (url, opt, ms) => new Promise((resolve, reject) => requests.push({ url, ms, resolve, reject, signal: opt.signal })) },
+    './store.js': { tokens, changed() {}, upsert: (m, patch) => Object.assign(tokens.get(m), patch) },
+    './settings.js': { settings: {} }, './jup.js': { ds: {}, cidPath: u => u.split('/ipfs/')[1] || null, ipfs: (u, g = 0) => (g ? 'https://slow.test/ipfs/' : 'https://fast.test/ipfs/') + u.split('/ipfs/')[1], img: x => x, imgFallback: () => '', GATEWAYS: ['https://fast.test/ipfs/', 'https://slow.test/ipfs/'] }
+  }, { setTimeout: (fn, ms) => { timers.set(++id, { fn, ms }); return id; }, clearTimeout: i => timers.delete(i) });
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r)); };
+  const token = i => { const t = { mint: 'c' + i, uri: 'https://origin.test/ipfs/cid' + i }; tokens.set(t.mint, t); return t; };
+  for (let i = 0; i < 6; i++) api.wantMeta(token(i), { priority: true });
+  await settle();
+  // fast gateway (not pinned) and origin (no CORS) fail; the slow gateway is next
+  for (const r of requests.filter(r => !r.url.startsWith('https://slow.test'))) r.reject(new Error('403'));
+  await settle();
+  const slow = requests.filter(r => r.url.startsWith('https://slow.test'));
+  assert.equal(slow.length, 6); assert.ok(slow.every(r => r.ms === 12000), 'the slow gateway gets 12 seconds');
+  assert.ok([...timers.values()].some(t => t.ms === 12500), 'the lookup deadline is extended for it');
+  const before = requests.length; api.wantMeta(token(9), { priority: true }); await settle();
+  assert.ok(requests.length > before, 'a fresh launch starts while six slow lookups wait');
+  slow[0].resolve({ image: 'https://cdn.test/a.png' }); await settle();
+  assert.equal(tokens.get('c0').image, 'https://cdn.test/a.png');
+});
+test('a ready pump.fun CDN picture comes first; the IPFS picture stays as the fallback', async () => {
+  const api = await adapter(), cid = 'Qm' + 'b'.repeat(44), cdn = 'https://d39w9554j5ohjb.cloudfront.net/coin-image/' + mint + '?variant=128x128';
+  const base = { mint, imageOriginal: `https://ipfs.io/ipfs/${cid}` };
+  assert.ok(!api.imageSources(base, 128).some(u => u.includes('cloudfront')), 'nothing from the CDN until it is known ready');
+  const urls = api.imageSources({ ...base, imagePump: cdn }, 128);
+  assert.equal(urls[0], cdn); assert.ok(urls.includes(`https://pump.mypinata.cloud/ipfs/${cid}?img-width=128`));
+  const big = api.imageSources({ ...base, imagePump: cdn }, 256);
+  assert.equal(big[0], cdn.replace('128x128', '256x256')); assert.equal(big[1], cdn, 'the cached small copy can show while the large one loads');
+  assert.equal(api.imageSources({ imagePump: 'https://evil.example/coin-image/x' }).length, 0, 'only the pump.fun CDN is accepted in this field');
+});
+test('trades keep Jupiter\'s wallet labels (influencer = KOL) and refuse anything that is not a plain label', async () => {
+  const { api: util } = await moduleAt('src/core/util.js');
+  const sig = '5'.repeat(88), w = 'So11111111111111111111111111111111111111112';
+  const body = { txs: [{ txHash: sig, traderAddress: w, type: 'buy', amount: 10, nativeVolume: 1.5, usdVolume: 300, usdPrice: 1, timestamp: '2026-10-17T00:00:00Z', walletCategories: ['influencer', 'whale', '<img src=x>', 'x'.repeat(40)] }] };
+  const fetch = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => body, text: async () => JSON.stringify(body) });
+  const { api } = await moduleAt('src/core/jup.js', { './util.js': { safeUrl: util.safeUrl, isMint: util.isMint }, './fee-policy.js': { assertZeroFeeRequest }, './retry-policy.js': { retryDelay } }, { fetch, AbortSignal });
+  const { txs } = await api.jx.txs(mint);
+  assert.equal(JSON.stringify(txs[0].cats), JSON.stringify(['influencer', 'whale']));
+});
+test('a coin Jupiter has not indexed yet gets its holders rebuilt from trades, then only newer trades are read', async () => {
+  const { api: util } = await moduleAt('src/core/util.js');
+  const A = 'So11111111111111111111111111111111111111112', B = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', C = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+  const tx = (n, w, type, amount) => ({ txHash: String(n).repeat(88).slice(0, 88), actionId: 'a' + n, traderAddress: w, type, amount, nativeVolume: 0.1, usdVolume: 10, usdPrice: 1, timestamp: '2026-10-17T00:00:00Z' });
+  let trades = [tx(3, A, 'buy', 500), tx(2, B, 'sell', 100), tx(1, B, 'buy', 300)], calls = [];
+  const fetch = async (u) => {
+    calls.push(String(u));
+    const body = /\/v1\/holders\//.test(u) ? { count: 0, holders: [] } : { txs: trades };
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => body, text: async () => JSON.stringify(body) };
+  };
+  const { api } = await moduleAt('src/core/jup.js', { './util.js': { safeUrl: util.safeUrl, isMint: util.isMint }, './fee-policy.js': { assertZeroFeeRequest }, './retry-policy.js': { retryDelay } }, { fetch, AbortSignal });
+  const d = await api.jh.holders(mint);
+  assert.equal(d.fromTrades, true); assert.equal(d.count, 2);
+  assert.equal(JSON.stringify(d.holders.map((h) => [h.wallet, h.amount])), JSON.stringify([[A, 500], [B, 200]]));
+  trades = [tx(4, C, 'buy', 50), tx(5, A, 'sell', 500), ...trades].sort((x, y) => y.actionId.localeCompare(x.actionId));
+  const again = await api.jh.holders(mint);
+  assert.equal(JSON.stringify(again.holders.map((h) => h.wallet)), JSON.stringify([B, C]), 'a full sell drops the wallet, a new buyer appears');
+});
+test('a coin whose holder list is only the bonding curve keeps the pool row and gets real holders from trades', async () => {
+  const { api: util } = await moduleAt('src/core/util.js');
+  const W = 'So11111111111111111111111111111111111111112', CURVE = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+  const fetch = async (u) => {
+    const body = /\/v1\/holders\//.test(u) ? { count: 1, holders: [{ address: CURVE, amount: 900, tags: [{ id: 'pump-curve', name: 'Pump.fun bonding curve' }] }] } : { txs: [{ txHash: '6'.repeat(88), actionId: 'b1', traderAddress: W, type: 'buy', amount: 40, nativeVolume: 0.1, usdVolume: 10, usdPrice: 1, timestamp: '2026-10-17T00:00:00Z' }] };
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => body, text: async () => JSON.stringify(body) };
+  };
+  const { api } = await moduleAt('src/core/jup.js', { './util.js': { safeUrl: util.safeUrl, isMint: util.isMint }, './fee-policy.js': { assertZeroFeeRequest }, './retry-policy.js': { retryDelay } }, { fetch, AbortSignal });
+  const d = await api.jh.holders(mint);
+  assert.equal(JSON.stringify(d.holders.map((h) => h.wallet)), JSON.stringify([CURVE, W])); assert.equal(d.count, 2); assert.equal(d.fromTrades, true);
+  const { api: again } = await moduleAt('src/core/jup.js', { './util.js': { safeUrl: util.safeUrl, isMint: util.isMint }, './fee-policy.js': { assertZeroFeeRequest }, './retry-policy.js': { retryDelay } }, { fetch: async (u) => {
+    const body = /\/v1\/holders\//.test(u) ? { count: 2, holders: [{ address: CURVE, amount: 900, tags: [{ id: 'pump-curve', name: 'Pump.fun bonding curve' }] }, { address: W, amount: 40, tags: [] }] } : { txs: [] };
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => body, text: async () => JSON.stringify(body) };
+  }, AbortSignal });
+  const full = await again.jh.holders(mint);
+  assert.equal(full.fromTrades, undefined, 'nothing new from trades: Jupiter\'s own list stands');
+});
+test('the trade feed can ask Jupiter for KOL trades or one holder tag only, and nothing else gets into the URL', async () => {
+  const { api: util } = await moduleAt('src/core/util.js');
+  const urls = [];
+  const fetch = async (u) => { urls.push(String(u)); const body = { txs: [] }; return { ok: true, status: 200, headers: { get: () => null }, json: async () => body, text: async () => JSON.stringify(body) }; };
+  const { api } = await moduleAt('src/core/jup.js', { './util.js': { safeUrl: util.safeUrl, isMint: util.isMint }, './fee-policy.js': { assertZeroFeeRequest }, './retry-policy.js': { retryDelay } }, { fetch, AbortSignal });
+  await api.jx.txs(mint, { categories: 'influencer' }); await api.jx.txs(mint, { tags: 'sniper', offset: 'abc' }); await api.jx.txs(mint, { tags: 'x&evil=1' });
+  assert.match(urls[0], /\?categories=influencer$/); assert.match(urls[1], /offset=abc&tags=sniper$/); assert.ok(!/evil/.test(urls[2]));
 });

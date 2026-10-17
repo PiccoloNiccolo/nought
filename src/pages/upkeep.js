@@ -43,7 +43,7 @@ const COSTS = [
 // where the data comes from, and what each source powers
 const SOURCES = [
   ['pp', 'PumpPortal', 'pumpportal.fun (websocket)', 'New pump.fun and LaunchLab launches and migrations the moment they happen'],
-  ['jg', 'Jupiter data', 'datapi.jup.ag', 'The Pulse columns, live trades, holders and charts'],
+  ['jg', 'Jupiter data', 'datapi.jup.ag', 'The Scope columns, live trades, holders and charts'],
   ['', 'Jupiter tokens and prices', 'lite-api.jup.ag', 'Search, coin facts and audits, prices, wallet balances, safety warnings'],
   ['', 'Jupiter swap and Ultra', 'lite-api.jup.ag · api.jup.ag', 'Quotes and the trade transactions your wallet signs'],
   ['', 'Jupiter Trigger', 'api.jup.ag', 'Limit orders'],

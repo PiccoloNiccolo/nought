@@ -11,12 +11,13 @@
 // Every trade made in Nought is logged in this browser ('trades') for PnL and the fees-saved counter.
 import { toast, esc, short, LS, emit, on, sleep, usd, isMint } from './util.js';
 import { settings, PRIO, preset } from './settings.js';
-import { wallet, needWallet, signAndSend, signTx } from './wallet.js';
+import { wallet, needWallet, signAndSend, signTx, tradeOwners } from './wallet.js';
 import { rpc, signatureStatus, TOKEN_PROGRAM, TOKEN_2022 } from './rpc.js';
 import { tokens } from './store.js';
 import { solUsd } from './price.js';
 import { ju, jupRaw, coolLeft } from './jup.js';
 import { assertZeroFeeQuote } from './fee-policy.js';
+import { pumpQuote, pumpTx } from './pumpdirect.js';
 
 export const SOL_MINT = 'So11111111111111111111111111111111111111112';
 export const JUP = 'https://lite-api.jup.ag';
@@ -131,7 +132,10 @@ export async function swapTx(q, prioKey = preset().prio, owner = wallet.owner) {
 
 // ---- protected route (Ultra). Without a taker the order is a quote only (no transaction). ----
 export async function ultraOrder(input, output, amountRaw, taker = null) {
-  const o = await jfetch('/ultra/v1/order?' + qs({ inputMint: needMint(input), outputMint: needMint(output), amount: rawStr(amountRaw), taker: taker ? needMint(taker, 'wallet') : null }), {}, 12000, undefined, HIGH);
+  // a local (imported or created) wallet only signs through programs on txcheck.js's allowlist: keep Ultra on its two
+  // verified routers (Metis → Jupiter's aggregator, JupiterZ) instead of letting it pick one Nought can't sign for
+  const local = taker && !(wallet.kind === 'external' && taker === wallet.owner);
+  const o = await jfetch('/ultra/v1/order?' + qs({ inputMint: needMint(input), outputMint: needMint(output), amount: rawStr(amountRaw), taker: taker ? needMint(taker, 'wallet') : null, excludeRouters: local ? 'dflow,okx' : null }), {}, 12000, undefined, HIGH);
   if (!o.outAmount || o.outAmount === '0') throw new Error(o.errorMessage || jupError(o) || 'No route for this coin yet.');
   if (taker && !o.transaction) throw new Error(o.errorMessage || 'Jupiter could not build this trade.'); // e.g. 'Insufficient funds' (errorCode 1)
   return o;
@@ -181,6 +185,12 @@ export async function ultraExecute(o, owner = wallet.owner, expect = ultraExpect
 const UNSENT = new Set([-1, -2, -3, -4, -5, -1002, -1003, -1004, -2002, -2003, -2004]);
 const ultraFailed = (code) => Number(code) > 0 || UNSENT.has(Number(code));
 
+// Jupiter's keyless Metis quote (/swap/v1/quote) answers 429 to most callers (checked 2026-10-17: even a first request),
+// while Ultra (/ultra/v1/order) answers. After a 429 on Metis, quotes and trades use Ultra for a minute instead of
+// failing ("Jupiter is busy"). Ultra adds Jupiter's own fee (shown as Jupiter's); Nought's stays 0.
+let metisDownUntil = 0;
+const metisBusy = (e) => e?.status === 429 || /rate limit|too many|429/i.test(e?.message || '');
+export const metisDown = () => Date.now() < metisDownUntil;
 const presetOf = (x) => (typeof x === 'number' ? settings.presets[x] : x) || preset();
 // A quote for the UI in the preset's mode: a swap/v1 quote ('off') or an Ultra order without a taker ('protected').
 // opts: {mev, slippage, preset (index or object)}
@@ -189,7 +199,14 @@ const presetOf = (x) => (typeof x === 'number' ? settings.presets[x] : x) || pre
 // refuses an Ultra order whose own slippage could pay out less than that.
 export async function quoteFor(input, output, amountRaw, opts = {}) {
   const p = presetOf(opts.preset), slip = opts.slippage ?? p.slippage;
-  if ((opts.mev ?? p.mev) !== 'protected') return quote(input, output, amountRaw, slip);
+  // pump.fun bonding-curve coins: quoted straight from the curve (instant, no Jupiter)
+  if (!opts.noPump && (input === SOL_MINT) !== (output === SOL_MINT)) {
+    try { const pq = await pumpQuote(input === SOL_MINT ? 'buy' : 'sell', input === SOL_MINT ? output : input, amountRaw, slip); if (pq) return pq; } catch { /* Jupiter below */ }
+  }
+  if ((opts.mev ?? p.mev) !== 'protected' && !metisDown()) {
+    try { return await quote(input, output, amountRaw, slip); }
+    catch (e) { if (!metisBusy(e)) throw e; metisDownUntil = Date.now() + 60000; }
+  }
   const o = await ultraOrder(input, output, amountRaw), bps = slipBps(slip), out = big(o.outAmount, 0n);
   if (!(Number(o.slippageBps) > 0)) Object.assign(o, { slippageBps: bps, otherAmountThreshold: String((out * BigInt(10000 - bps)) / 10000n), slippageFromPreset: true });
   return o;
@@ -322,13 +339,29 @@ async function runTrade(side, mint, amountRaw, opts) {
   needMint(owner, 'wallet');
   const raw = rawStr(amountRaw), minOut = opts.minOutRaw == null ? null : big(opts.minOutRaw, -1n);
   if (minOut != null && minOut < 0n) throw new Error('The reviewed minimum is not a whole number of base units.');
-  const p = presetOf(opts.preset), slippage = opts.slippage ?? p.slippage, prio = opts.prio ?? p.prio, mev = opts.mev ?? p.mev ?? 'off';
+  const p = presetOf(opts.preset), slippage = opts.slippage ?? p.slippage, prio = opts.prio ?? p.prio;
+  let mev = metisDown() ? 'protected' : opts.mev ?? p.mev ?? 'off';
   const label = opts.label || (tokens.get(mint)?.symbol ? '$' + tokens.get(mint).symbol : short(mint));
   const [inM, outM] = side === 'buy' ? [SOL_MINT, mint] : [mint, SOL_MINT];
   const moved = () => { toast('The price moved since you reviewed it. Check the new quote and try again.', 'err'); return { status: 'aborted' }; };
   let q, sig, st, outRaw, signing = false, note = '';
   try {
-    if (mev === 'protected') {
+    const pq = opts.noPump ? null : await pumpQuote(side, mint, raw, slippage).catch(() => null);
+    if (pq) {
+      // pump.fun's own program: no aggregator, no rate limit; the SOL spent includes pump.fun's fee
+      q = pq; mev = 'off';
+      sameTrade(q, inM, outM, raw);
+      guardImpact(q, opts.maxImpactPct);
+      if (minOut != null) { if (big(q.outAmount, 0n) < minOut) return moved(); if (big(q.otherAmountThreshold, 0n) < minOut) q.otherAmountThreshold = minOut.toString(); }
+      const built = await pumpTx(q, owner, prioCap(prio));
+      toast(`Approve the ${side} of ${esc(label)} in your wallet… (pump.fun direct)`);
+      signing = true; markTrade(owner, mint);
+      try { sig = await signAndSend(built.tx, owner, swapExpect(inM, outM, raw, prioCap(prio), side === 'buy' ? ATA_RENT + 1844400 : 0, minOutOf(q))); }
+      catch (e) { if (!e?.maybeSent || !e.sig) throw e; sig = e.sig; }
+      toast(`Sent. Confirming… ${txLink(sig)}`);
+      st = await settle(sig, { blockhash: built.blockhash, lastValidBlockHeight: built.lastValidBlockHeight });
+      outRaw = q.outAmount;
+    } else if (mev === 'protected') {
       q = await ultraOrder(inM, outM, raw, owner);
       sameTrade(q, inM, outM, raw);
       guardImpact(q, opts.maxImpactPct);
@@ -349,7 +382,13 @@ async function runTrade(side, mint, amountRaw, opts) {
       else { if (x.status === 'Failed') toast(`Jupiter reports the ${side} did not land. Checking the network to be sure… ${txLink(sig)}`); st = await settle(sig, { blockhash: x.blockhash }); }
       outRaw = x.outputAmountResult || x.totalOutputAmount || q.outAmount;
     } else {
-      q = await quote(inM, outM, raw, slippage);
+      try { q = await quote(inM, outM, raw, slippage); }
+      catch (e) {
+        if (!metisBusy(e)) throw e;
+        // Metis refused: run this same trade through Ultra
+        metisDownUntil = Date.now() + 60000;
+        return runTrade(side, mint, amountRaw, { ...opts, mev: 'protected' });
+      }
       sameTrade(q, inM, outM, raw);
       guardImpact(q, opts.maxImpactPct);
       if (minOut != null) { const held = holdToMin(q, minOut); if (!held) return moved(); q = held; }
@@ -378,7 +417,7 @@ async function runTrade(side, mint, amountRaw, opts) {
     : st.expired ? `The ${side} of ${esc(label)} did not land before it expired, so nothing was traded. ${txLink(sig)}`
     : r === 'failed' ? `The trade failed${note ? ': ' + esc(String(note).slice(0, 160)) : ' on-chain (often slippage)'}. ${txLink(sig)}`
     : `Still confirming. Check your wallet before trying again. ${txLink(sig)}`, r === 'ok' ? 'ok' : r === 'failed' ? 'err' : '');
-  emit('traded', { mint, side, sig, status: r, owner });
+  emit('traded', { mint, side, sig, status: r, owner, sol: solAmt });
   return { status: r, sig, slot: st.slot || null, expired: !!st.expired };
 }
 // the quote must be for exactly what was asked, and carry no platform fee (Ultra's feeBps is Jupiter's own)
@@ -392,14 +431,34 @@ function guardImpact(q, max) {
 }
 
 // one-click buy of sol SOL (default: the preset's amount), 0 < sol ≤ MAX_QUICK_SOL
+// ---- multi-wallet ----
+// With several local wallets picked (wallet.selected), every buy and sell runs on all of them AT ONCE, one transaction
+// per wallet. multiMode(): 'each' (default) = every wallet buys the amount you click; 'split' = the amount is divided.
+export const multiMode = () => (LS.get('multi.mode', 'each') === 'split' ? 'split' : 'each');
+export function setMultiMode(m) { LS.set('multi.mode', m === 'split' ? 'split' : 'each'); emit('wallet', wallet); }
+// SOL each wallet spends for a click of `sol` over n wallets
+export const perWalletSol = (sol, n) => (n > 1 && multiMode() === 'split' ? sol / n : sol);
+// run fn(owner) for every owner in parallel; a wallet's error is toasted with its address, the rest carry on
+// (with several wallets, ones that simply hold none of the coin are not an error unless all of them hold none)
+async function acrossOwners(owners, fn, what) {
+  const many = owners.length > 1, res = await Promise.all(owners.map((owner) => fn(owner).then((ok) => ({ ok: !!ok }), (e) => ({ e }))));
+  const holdsNone = (r) => r.e && /hold none/i.test(r.e.message || '');
+  if (many && res.every(holdsNone)) { toast('None of your selected wallets hold this coin.', 'err'); return 0; }
+  for (const [i, r] of res.entries()) if (r.e && !(many && holdsNone(r))) toast(`${many ? esc(short(owners[i])) + ': ' : ''}${esc(r.e?.message || `The ${what} did not go through.`)}`, 'err');
+  return res.filter((r) => r.ok).length;
+}
 export async function quickBuy(mint, btn, amountSol = preset().buy) {
   const sol = Number(amountSol);
   if (!isMint(mint)) { toast('That is not a coin address.', 'err'); return; }
   if (!(sol > 0 && sol <= MAX_QUICK_SOL)) { toast(`Set a buy amount above 0 and at most ${MAX_QUICK_SOL} SOL in your preset.`, 'err'); return; }
+  const owners = tradeOwners();
+  if (!owners.length) { needWallet(); return; }
+  const each = BigInt(Math.round(perWalletSol(sol, owners.length) * 1e9));
+  if (each <= 0n) { toast('That amount is too small to split over your wallets.', 'err'); return; }
   if (btn) btn.disabled = true;
-  try { await trade('buy', mint, BigInt(Math.round(sol * 1e9)), { maxImpactPct: 25 }); } // one-click buys never see a quote
-  catch (e) { toast(esc(e?.message || 'The trade did not go through.'), 'err'); }
-  if (btn) btn.disabled = false;
+  // one-click buys never see a quote; every selected wallet sends at the same moment
+  try { await acrossOwners(owners, (owner) => trade('buy', mint, each, { maxImpactPct: 25, owner }), 'trade'); }
+  finally { if (btn) btn.disabled = false; }
 }
 
 // ---- balances and selling a share of a holding ----
@@ -470,9 +529,12 @@ export async function sellPct(mint, pct, opts = {}) {
 export async function quickSell(mint, btn, pct = preset().sellPct) {
   if (!isMint(mint)) { toast('That is not a coin address.', 'err'); return; }
   if (btn) btn.disabled = true;
-  try { if (needWallet()) await sellPct(mint, pct); }
-  catch (e) { toast(esc(e?.message || 'The sale did not go through.'), 'err'); }
-  if (btn) btn.disabled = false;
+  try {
+    const owners = tradeOwners();
+    if (!owners.length) { needWallet(); return; }
+    // each wallet sells pct% of its own balance, all at once
+    await acrossOwners(owners, (owner) => sellPct(mint, pct, { owner }), 'sale');
+  } finally { if (btn) btn.disabled = false; }
 }
 
 // ---- local trade log for PnL: [{mint, side, sol, tokensRaw, sig, at, owner, solUsd, mode, jupFeeBps, route, savedSol, savedUsd}] ----

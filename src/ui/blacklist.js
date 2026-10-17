@@ -29,10 +29,11 @@ export function handleOf(t) {
 
 let items = [];       // [{k, v, at, note}]
 let sets = {};        // k → Set(v)
+let mintAt = new Map(); // hidden coin → when it was hidden (for "unhide on migration")
 let words = [];
 function index() {
-  sets = { mint: new Set(), dev: new Set(), x: new Set() }; words = [];
-  for (const it of items) (it.k === 'word' ? words.push(it.v) : sets[it.k]?.add(it.v));
+  sets = { mint: new Set(), dev: new Set(), x: new Set() }; words = []; mintAt = new Map();
+  for (const it of items) { (it.k === 'word' ? words.push(it.v) : sets[it.k]?.add(it.v)); if (it.k === 'mint') mintAt.set(it.v, it.at); }
 }
 function load() {
   const raw = LS.get('pulse.blacklist', []);
@@ -56,10 +57,12 @@ export function add(k, v, note = '') {
 export function remove(k, v) { const n = norm(k, v), before = items.length; items = items.filter((it) => !(it.k === k && it.v === n)); if (items.length !== before) save(); }
 export function clear(k) { items = k ? items.filter((it) => it.k !== k) : []; save(); }
 
-// why a coin is hidden, or null. ignoreMint: Display's "unhide on migrate" lets hidden coins back into Migrated.
+// why a coin is hidden, or null. ignoreMint: Display's "unhide on migrate" lets a coin back into Migrated when it
+// migrated AFTER it was hidden. A coin hidden while already migrated stays hidden (or Hide in Migrated did nothing).
 export function blocked(t, { ignoreMint = false } = {}) {
   if (!t) return null;
-  if (!ignoreMint && sets.mint.has(t.mint)) return { k: 'mint', v: t.mint, label: 'coin' };
+  const migratedSinceHidden = ignoreMint && t.migrated && Number(t.migratedAt) > (mintAt.get(t.mint) || Infinity);
+  if (sets.mint.has(t.mint) && !migratedSinceHidden) return { k: 'mint', v: t.mint, label: 'coin' };
   if (t.dev && sets.dev.has(t.dev)) return { k: 'dev', v: t.dev, label: 'dev ' + short(t.dev) };
   if (sets.x.size) { const h = handleOf(t); if (h && sets.x.has(h)) return { k: 'x', v: h, label: '@' + h }; }
   if (words.length) {
@@ -111,7 +114,7 @@ export function openBlacklist(start = 'mint') {
   const d = document.createElement('dialog'); d.className = 'bl-dlg pu-dlg';
   let tab = KINDS[start] ? start : 'mint', q = '';
   d.innerHTML = `<div class="pd">
-    <div class="pd-head"><h2>Blacklist</h2><span class="muted">Hidden on Pulse in this browser</span><button type="button" class="pd-x" data-close title="Close">${ICON.close}</button></div>
+    <div class="pd-head"><h2>Blacklist</h2><span class="muted">Hidden on Scope in this browser</span><button type="button" class="pd-x" data-close title="Close">${ICON.close}</button></div>
     <div class="pd-tabs" role="tablist"></div>
     <form class="bl-add" autocomplete="off"><input name="v" spellcheck="false" aria-label="Value to blacklist"><button class="btn btn-accent" type="submit">Add</button></form>
     <input class="bl-q" type="search" placeholder="Filter this list" aria-label="Filter the list">
@@ -126,7 +129,7 @@ export function openBlacklist(start = 'mint') {
     $d('.bl-add input').placeholder = PH[tab];
     const list = entries(tab).filter((it) => !q || it.v.toLowerCase().includes(q) || it.note.toLowerCase().includes(q)).reverse();
     $d('.bl-list').innerHTML = list.length ? list.slice(0, 400).map((it) => `<div class="bl-row"><span class="mono v" title="${esc(it.v)}">${esc(tab === 'x' ? '@' + it.v : tab === 'word' ? it.v : short(it.v, 6))}</span><span class="n">${esc(it.note)}</span><span class="dim mono">${ago(it.at)}</span>${tab === 'mint' ? `<a href="#/t/${esc(it.v)}" title="Open">Open</a>` : tab === 'dev' ? `<a href="https://solscan.io/account/${esc(it.v)}" target="_blank" rel="noopener">Solscan</a>` : ''}<button type="button" data-rm="${esc(it.v)}" title="Remove">${ICON.close}</button></div>`).join('') + (list.length > 400 ? `<div class="dim bl-more">${list.length - 400} more. Filter to find them.</div>` : '')
-      : `<div class="bl-empty">${q ? 'Nothing matches.' : `No ${esc(KINDS[tab].toLowerCase())} yet. ${tab === 'mint' ? 'Hover a card on Pulse and use the eye button, or press H.' : tab === 'dev' ? 'Hover a card on Pulse and use the person button.' : 'Add one above.'}`}</div>`;
+      : `<div class="bl-empty">${q ? 'Nothing matches.' : `No ${esc(KINDS[tab].toLowerCase())} yet. ${tab === 'mint' ? 'Hover a card on Scope and use the eye button, or press H.' : tab === 'dev' ? 'Hover a card on Scope and use the person button.' : 'Add one above.'}`}</div>`;
   };
   draw();
   const off = onChange(draw);

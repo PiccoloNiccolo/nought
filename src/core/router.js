@@ -16,7 +16,7 @@ export function parse(hash = location.hash || '#/') {
     const m = r.match ? hash.match(r.match) : hash === r.path || (r.path === '#/' && (hash === '' || hash === '#'));
     if (m) return { route: r, params: Array.isArray(m) ? m.slice(1) : [] };
   }
-  return { route: routes.find((r) => r.path === '#/pulse') || routes[0], params: [] };
+  return { route: routes.find((r) => r.path === '#/scope') || routes[0], params: [] };
 }
 export function go() {
   const { route, params } = parse();

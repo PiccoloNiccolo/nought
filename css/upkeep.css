@@ -8,15 +8,15 @@
 .uk .uk-head h1 em { font-style: normal; color: var(--up); }
 .uk .uk-lede { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; max-width: 76ch; }
 .uk-toc { display: flex; flex-wrap: wrap; gap: 6px; }
-.uk-toc button { height: 28px; padding: 0 11px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel); color: var(--muted); font-size: 12px; font-weight: 500; }
-.uk-toc button:hover { color: var(--fg); border-color: var(--dim); }
+.uk-toc button { height: 26px; padding: 0 12px; border-radius: var(--pill); border: 1px solid var(--line); background: none; color: var(--fg-2); font: 500 12px/1 var(--sans); }
+.uk-toc button:hover { color: var(--fg); background: var(--hover); border-color: var(--line-2); }
 
 .uk-row { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr); gap: 14px; align-items: start; }
 .uk-row.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.uk-panel { min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 0 0 16px; display: grid; gap: 12px; align-content: start; scroll-margin-top: 12px; }
-.uk-ph { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel-2); border-radius: 10px 10px 0 0; flex-wrap: wrap; }
-.uk .uk-ph h2 { margin: 0; font: 600 14px/1.2 var(--sans); letter-spacing: -.01em; }
-.uk-pill { margin-left: auto; display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 5px; border: 1px solid var(--line-2); color: var(--muted); font: 600 10.5px/1 var(--mono); letter-spacing: .02em; white-space: nowrap; }
+.uk-panel { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); padding: 0 0 16px; display: grid; gap: 12px; align-content: start; scroll-margin-top: 12px; }
+.uk-ph { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 0 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.uk .uk-ph h2 { margin: 0; font: 500 14px/1.2 var(--sans); }
+.uk-pill { margin-left: auto; display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: var(--pill); border: 1px solid var(--line-2); color: var(--muted); font: 600 11px/1 var(--sans); white-space: nowrap; }
 .uk-pill.ok { color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, transparent); background: color-mix(in srgb, var(--up) 8%, transparent); }
 .uk-pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: color-mix(in srgb, var(--warn) 7%, transparent); }
 .uk-pill.link:hover { color: var(--fg); border-color: var(--dim); }
@@ -26,7 +26,7 @@
 /* tables: scroll inside their own box on narrow screens */
 .uk-scroll { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 .uk-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.uk-table th { text-align: left; padding: 7px 16px; color: var(--muted); font: 500 10.5px/1.2 var(--sans); text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.uk-table th { text-align: left; padding: 10px 16px; color: var(--muted); font: 400 12px/1.2 var(--sans); border-bottom: 1px solid var(--line); white-space: nowrap; }
 .uk-table td { padding: 9px 16px; border-bottom: 1px solid var(--line); vertical-align: top; color: var(--muted); line-height: 1.45; }
 .uk-table tr:last-child td { border-bottom: 0; }
 .uk-table td b { color: var(--fg); font-weight: 600; white-space: nowrap; }
@@ -62,7 +62,7 @@
 .uk-flow li:not(:last-child)::after { content: ''; position: absolute; left: 11px; top: 22px; bottom: 0; width: 1px; background: var(--line-2); }
 .uk-flow b { font-size: 13px; font-weight: 600; }
 .uk-flow span { color: var(--muted); font-size: 12px; line-height: 1.45; }
-.uk-live { border: 1px solid var(--line-2); border-radius: 9px; background: var(--bg); min-height: 180px; display: grid; align-content: start; overflow: hidden; }
+.uk-live { border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--bg); min-height: 180px; display: grid; align-content: start; overflow: hidden; }
 .uk-empty { display: grid; gap: 8px; justify-items: center; text-align: center; align-content: center; min-height: 220px; padding: 22px; }
 .uk-empty b { font-size: 15px; }
 .uk-empty span { color: var(--muted); font-size: 12.5px; line-height: 1.55; max-width: 42ch; }

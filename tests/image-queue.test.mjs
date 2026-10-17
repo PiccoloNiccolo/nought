@@ -65,3 +65,12 @@ test('scroll promotion lets an already queued offscreen image use reserved visib
   assert.equal(h.requests.length,2); target.priority(100); h.flush();
   assert.equal(h.requests[2].url,'https://image.test/target');
 });
+test('a slow gateway can be given a longer timeout than ordinary image hosts', () => {
+  const h = harness({ limit: 4, timeout: 3500, timeoutFor: url => url.includes('slow.test') ? 12000 : 0 });
+  let failed = 0, loaded = '';
+  h.q.request('a', ['https://slow.test/cid'], url => { loaded = url; }, () => failed++);
+  h.q.request('b', ['https://fast.test/x'], () => {}, () => failed++);
+  h.flush(); h.tick(3600);
+  assert.equal(failed, 1, 'the ordinary host times out at 3.5 seconds');
+  h.requests[0].success(); assert.equal(loaded, 'https://slow.test/cid', 'the slow gateway is still allowed to finish');
+});

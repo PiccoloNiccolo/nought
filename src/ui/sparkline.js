@@ -20,11 +20,9 @@ export function sparkSvg(pts, { w = 92, h = 26 } = {}) {
   const line = xy.map(([x, y], i) => (i ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1)).join('');
   const up = pts[pts.length - 1] >= pts[0], c = up ? 'var(--up)' : 'var(--down)';
   const area = `${line}L${xy[xy.length - 1][0].toFixed(1)} ${h}L1 ${h}Z`;
-  const last = xy[xy.length - 1];
   return `<svg class="spark-svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true" preserveAspectRatio="none">`
-    + `<path d="${area}" style="fill:${c};opacity:.12;stroke:none"/>`
-    + `<path d="${line}" style="fill:none;stroke:${c};stroke-width:1.3;stroke-linejoin:round;stroke-linecap:round" vector-effect="non-scaling-stroke"/>`
-    + `<circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="1.8" style="fill:${c}"/></svg>`;
+    + `<path d="${area}" style="fill:${c};opacity:.13;stroke:none"/>`
+    + `<path d="${line}" style="fill:none;stroke:${c};stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round" vector-effect="non-scaling-stroke"/></svg>`;
 }
 
 const fresh = (e) => e && Date.now() - e.at < (e.pts ? TTL : FAIL_TTL);

@@ -8,7 +8,7 @@ The source is published at https://github.com/PiccoloNiccolo/nought. Dated notes
 
 # 0.2 implementation notes (2026-10-04)
 
-This copy lives in the current Codex chat and supersedes the historical freeze/ownership notes below. It is still static, original, and zero-house-fee.
+This is the current copy and supersedes the historical freeze/ownership notes below. It is still static, original, and zero-house-fee.
 
 - `app.js` starts SOL pricing and Pulse seeding independently.
 - `seed.js`: gems/recent intervals are 4/10 seconds on Pulse, 30/60 seconds on other pages, paused while hidden. `feedCadence()` exports the policy; `feed` events report status without dirtying stored tokens.
@@ -35,7 +35,6 @@ Nought is an ORIGINAL open-source, zero-fee Solana memecoin terminal in the dens
 4. **Untrusted data.** Every string from a token, wallet, or API goes through `esc()` before HTML and `safeUrl()` before any href/src (`src/core/util.js`). Never `innerHTML` raw API strings. Never `eval`.
 5. **Money safety.** Transactions only come from Jupiter (swap/ultra/trigger) or code you build with `@solana/web3.js` for transfers the user explicitly asks for. Show amount, destination and token before any signing. Never send funds anywhere the user didn't type or pick.
 6. **Own your files.** Only edit files assigned to you. Shared core files are frozen after the core phase; if you need more from core, write a helper in your own module. `index.html`, `app.js`, `style.css` and `src/ui/shell.js` belong to the shell owner.
-7. **Don't deploy, don't publish, don't create accounts or repos.**
 
 ## Layout
 - `index.html` shell: header (nav, search button, presets, SOL price, settings, wallet), `<main id="view">`, status bar, dialogs (#settings, #wallets, #search-dlg), `#toasts`. Libraries loaded globally: `window.solanaWeb3` (@solana/web3.js 1.98 IIFE), `window.LightweightCharts` (4.2.0).

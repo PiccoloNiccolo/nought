@@ -1,26 +1,21 @@
 // Search: a dialog opened with / or the top bar. Jupiter's token search is the main source (200 ms debounce), with
 // Dexscreener as the fallback; a pasted address also pulls the token's Dexscreener pools. Rows: picture, ticker, name,
 // age, market cap, 24h volume, liquidity, socials, quick buy. Sort by relevance, market cap, volume or age.
-// Arrow keys move, Enter opens, Esc closes. The last 20 opened coins are kept in this browser (LS 'recent'). With
-// nothing typed it shows them, plus "Trending now": the five busiest coins Nought has seen this session (store).
-import { $, $$, esc, safeUrl, isMint, usd, short, ago, LS, ICON, sleep } from '../core/util.js';
+// Arrow keys move, Enter opens, Esc closes. The last 20 coins viewed are kept in this browser (src/ui/recent.js, LS
+// 'recent'). With nothing typed it shows them, plus "Trending now": the five busiest coins Nought has seen this session.
+import { $, $$, esc, isMint, usd, short, ago, LS, ICON, sleep } from '../core/util.js';
 import { tokens, upsert, mcUsd } from '../core/store.js';
 import { jt, ds } from '../core/jup.js';
 import { applyPair } from '../core/meta.js';
 import { avatar, socials, qbButton } from './card.js';
+import { recentCoins, rememberCoin, clearRecent } from './recent.js';
 
 const SORTS = [['rel', 'Relevance'], ['mc', 'MC'], ['vol', 'Volume'], ['age', 'Newest']];
 const S = { q: '', rows: [], src: '', sort: LS.get('search.sort', 'rel'), active: -1, seq: 0, timer: 0, wired: false, mode: 'recent', error: '' };
 if (!SORTS.some(([k]) => k === S.sort)) S.sort = 'rel';
 
-// ---- recent ----
-// kept as {mint, symbol, name, image} and re-checked on every read (the list comes back from storage)
-const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : undefined);
-const recent = () => { const l = LS.get('recent', []); return (Array.isArray(l) ? l : []).map((r) => (typeof r === 'string' ? { mint: r } : r)).filter((r) => r && isMint(r.mint)).slice(0, 20).map((r) => ({ mint: r.mint, symbol: str(r.symbol, 24), name: str(r.name, 60), image: safeUrl(r.image) || undefined })); };
-function remember(row) {
-  const keep = { mint: row.mint, symbol: row.symbol, name: row.name, image: row.image };
-  LS.set('recent', [keep, ...recent().filter((r) => r.mint !== row.mint)].slice(0, 20));
-}
+// ---- recent: coins viewed in this browser (src/ui/recent.js) ----
+const recent = recentCoins, remember = rememberCoin;
 
 // ---- both sources normalised to one row shape ----
 // {mint, symbol, name, image, created, mc, vol, liq, twitter, telegram, website, verified, launchpad, progress, migrated, dex, rank}
@@ -64,13 +59,18 @@ function rowHtml(r, i) {
     ${qbButton(r.mint)}
   </div>`;
 }
-// the busiest coins in the store over the last hour (5-minute or 24-hour volume when that is all there is)
-const NOT_MEMES = new Set(['So11111111111111111111111111111111111111112', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB']);
-function trending(skip, n = 5) {
-  const vol = (t) => Number(t.stats1h?.vol) || Number(t.stats5m?.vol) * 12 || Number(t.volume24h) / 24 || 0;
-  return [...tokens.values()].filter((t) => t.symbol && isMint(t.mint) && !skip.has(t.mint) && !NOT_MEMES.has(t.mint)).map((t) => [t, vol(t)]).filter(([, v]) => v > 0)
-    .sort((a, b) => b[1] - a[1]).slice(0, n).map(([t]) => t);
+// The busiest coins in the store over the last hour (5-minute or 24-hour volume when that is all there is), one per
+// ticker: copycat launches share a name, and only the busiest of them is kept. Search's "Trending now" and the coin
+// strip's fallback (src/ui/ticker.js) both use it.
+export const NOT_MEMES = new Set(['So11111111111111111111111111111111111111112', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB']);
+export const tickerKey = (s) => String(s || '').replace(/^\$/, '').trim().toLowerCase();
+export function busiestCoins(skip = new Set(), n = 5) {
+  const vol = (t) => Number(t.stats1h?.vol) || Number(t.stats5m?.vol) * 12 || Number(t.volume24h) / 24 || 0, seen = new Set(), out = [];
+  const all = [...tokens.values()].filter((t) => t.symbol && isMint(t.mint) && !skip.has(t.mint) && !NOT_MEMES.has(t.mint)).map((t) => [t, vol(t)]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  for (const [t] of all) { const k = tickerKey(t.symbol); if (seen.has(k)) continue; seen.add(k); out.push(t); if (out.length >= n) break; }
+  return out;
 }
+const trending = busiestCoins;
 const KEYS = `<div class="sr-keys" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span><span>Paste a token address to open it directly</span></div>`;
 const COLS = '<div class="sr-cols" aria-hidden="true"><span></span><span>Token</span><span class="sr-nums"><span>Age</span><span>MC</span><span>Vol 24h</span><span>Liq</span></span><span class="qbw"></span></div>';
 function paint() {
@@ -201,7 +201,7 @@ function wire() {
     }
   });
   out.addEventListener('click', (e) => {
-    if (e.target.closest('[data-clear-recent]')) { LS.set('recent', []); paint(); input.focus(); return; }
+    if (e.target.closest('[data-clear-recent]')) { clearRecent(); paint(); input.focus(); return; }
     if (e.target.closest('a, button')) return; // socials, copy, quick buy
     const r = e.target.closest('[data-go]'); if (r) go(r.dataset.go);
   });

@@ -17,7 +17,7 @@ import { cardHtml, cardKey, lpInfo } from '../ui/card.js';
 import { COL_IDS, loadAll, compile, activeCount, buildBody, openFilters, emptyFilter, saveAll } from '../ui/pulse-filters.js';
 import * as BL from '../ui/blacklist.js';
 import { attachHover } from '../ui/hover.js';
-import { imageKey, syncTokenImage, primeTokenImage, retryTokenImages } from '../ui/token-image.js';
+import { imageKey, syncTokenImage, primeTokenImage, retryTokenImages, imageReady } from '../ui/token-image.js';
 import { watchMints, toggleWatch } from '../core/watchlist.js';
 
 const by = (k) => (a, b) => (b[k] || 0) - (a[k] || 0);
@@ -29,29 +29,46 @@ export const COLS = [
 ];
 const MAX = 100, MAX_QB = 100, QB_CAP = 1000; // cards per column; largest per-column amount you can type; largest click (as card.js and the shell)
 const TONE = { new: [880, 1175], stretch: [660, 880], migrated: [988, 1319] };
-const DISPLAY = { ms: 'm', qbSize: 'm', circle: false, ring: true, grey: false, nodec: false, detail: false, search: true, showHidden: false, unhideMigrate: true, vol: 0.5 };
+// holdPic: a brand-new coin's row waits for its picture, at most HOLD_MS, so launches arrive with artwork
+const HOLD_MS = 1000;
+const DISPLAY = { size: 'l', holdPic: true, ms: 'm', qbSize: 'm', circle: false, ring: true, grey: false, nodec: false, detail: false, search: true, showHidden: false, unhideMigrate: true, vol: 0.5 };
 const SORTS = { newest: 'Newest', volume: 'Volume · 5m', change: 'Gainers · 5m', liquidity: 'Liquidity', cap: 'Market cap' };
 const sortValue = (t, mode) => mode === 'volume' ? t.stats5m?.vol : mode === 'change' ? t.stats5m?.priceChange : mode === 'liquidity' ? t.liquidity : mcUsd(t);
-const loadSorts = () => { const saved = LS.get('pulse.sorts', {}); return Object.fromEntries(COL_IDS.map((c) => [c, Object.hasOwn(SORTS, saved?.[c]) ? saved[c] : 'newest'])); };
-const OPT = { ms: ['s', 'm', 'l'], qbSize: ['s', 'l', 'm', 'u'] };
+// Final stretch opens on market cap, highest first: the coins closest to graduating sit on top ('pulse.sorts2' so
+// choices saved under the old default start from the new one once)
+const SORT_DEFAULT = { new: 'newest', stretch: 'cap', migrated: 'newest' };
+const sortDefault = (c) => SORT_DEFAULT[c] || 'newest';
+const loadSorts = () => { const saved = LS.get('pulse.sorts2', {}); return Object.fromEntries(COL_IDS.map((c) => [c, Object.hasOwn(SORTS, saved?.[c]) ? saved[c] : sortDefault(c)])); };
+const OPT = { size: ['m', 'l'], ms: ['s', 'm', 'l'], qbSize: ['s', 'l', 'm', 'u'] };
 function loadDisplay() {
   const d = { ...DISPLAY, ...LS.get('pulse.display', {}) };
   for (const [k, v] of Object.entries(DISPLAY)) if (typeof d[k] !== typeof v || (OPT[k] && !OPT[k].includes(d[k]))) d[k] = v;
   d.vol = Math.max(0, Math.min(1, d.vol));
   return d;
 }
+const svg = (d, w = 15) => `<svg viewBox="0 0 24 24" width="${w}" height="${w}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const IC = {
-  bell: (off) => `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16Zm4 4a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>${off ? '<path d="M4 4l16 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' : ''}</svg>`,
-  keys: '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M8 14h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
-  ban: '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5 17.5 6.5" stroke="currentColor" stroke-width="2"/></svg>',
-  disp: '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="10" cy="17" r="2" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
+  bell: (off) => svg(`<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16Zm4 4a2 2 0 0 0 4 0"/>${off ? '<path d="M4 4l16 16" stroke-width="2"/>' : ''}`, 15),
+  keys: svg('<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M8 14h8" stroke-width="2"/>', 16),
+  // Blacklist: an eye with a line through it
+  ban: svg('<path d="M3 12s3.4-6 9-6c1.6 0 3 .5 4.2 1.2M21 12s-3.4 6-9 6c-1.6 0-3-.5-4.2-1.2"/><path d="M9.9 14.1a3 3 0 0 1 4.2-4.2M4 20 20 4"/>', 16),
+  disp: svg('<path d="M4 6h16M4 12h16M4 18h10"/>', 15),
+  star: (on) => `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3Z" fill="${on ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
+  retry: svg('<path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/>', 15),
+  sort: svg('<path d="M7 4v16m0 0-3.5-3.5M7 20l3.5-3.5M17 20V4m0 0-3.5 3.5M17 4l3.5 3.5"/>', 15),
+  pause: svg('<path d="M9 5v14M15 5v14" stroke-width="2.2"/>', 14),
+  play: '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5Z" fill="currentColor"/></svg>',
 };
 const solTxt = (v) => String(Math.round(Number(v) * 1e4) / 1e4);
 const AGE_RE = /(data-age="\d+"[^>]*>)[^<]*/;
-const SKELETON = '<span class="sr-only">Loading coins…</span>' + '<div class="pu-skc" aria-hidden="true"><i class="skel sk-av"></i><span class="sk-m"><i class="skel"></i><i class="skel"></i><i class="skel"></i></span><span class="sk-s"><i class="skel"></i><i class="skel"></i><i class="skel pill"></i></span></div>'.repeat(6);
+const SKELETON = '<span class="sr-only">Loading coins…</span>' + '<div class="pu-skc" aria-hidden="true"><span class="sk-p"><i class="skel sk-av"></i><i class="skel sk-ca"></i></span><span class="sk-m"><i class="skel"></i><i class="skel"></i><i class="skel"></i><i class="skel sk-pills"></i></span><span class="sk-s"><i class="skel"></i><i class="skel"></i><i class="skel sk-qb"></i></span></div>'.repeat(7);
+// launchpad chips on the header: the same short labels as the card badges (pump.fun has none there, so "PUMP")
+// the search box shows the longest hint that fits its width
+const PH = ['Search ticker, name or address', 'Search ticker or CA', 'Search coins', 'Search'];
+const lpChip = (id) => { const l = lpInfo(id); return `<button type="button" data-glp="${esc(id)}" style="--lp:${esc(l.color)}" title="${esc(l.label)}" aria-label="${esc(l.label)}"><i></i>${esc(l.short || 'PUMP')}</button>`; };
 
 register({
-  id: 'pulse', tab: 'pulse', path: '#/pulse', title: 'Pulse · Nought',
+  id: 'pulse', tab: 'pulse', path: '#/scope', match: /^#\/(?:scope|pulse)$/, title: 'Scope · Nought',
   mount(view) {
     const S = {
       hovered: new Set(), lastCol: '', popHold: false, socialHold: false, mobile: COL_IDS.includes(LS.get('pulse.mobile', 'new')) ? LS.get('pulse.mobile', 'new') : 'new',
@@ -68,26 +85,29 @@ register({
 
     view.innerHTML = `<div class="pu">
       <div class="pu-top">
-        <div class="pu-title"><h1>Pulse</h1><span class="pu-chain"><i></i>Solana</span><span class="pu-zero" title="Nought adds no trading fee. Network and pool fees still apply.">0% house fee</span></div>
-        <input class="pu-q" type="search" placeholder="Filter tokens…" aria-label="Filter coins on the board by name, ticker or address" spellcheck="false">
+        <div class="pu-title"><h1>Scope</h1>
+          <div class="pu-lps" role="group" aria-label="Launchpads (sent to the feed)"><div class="pu-lpi"><button type="button" data-lpall title="All launchpads">All</button>${LAUNCHPADS.map(lpChip).join('')}</div></div>
+          <span class="pu-zero" title="Nought adds no trading fee. Network and pool fees still apply.">0% house fee</span></div>
         <span class="pu-sp"></span>
-        <details class="pu-sources"><summary class="pu-btn" title="Filter by launchpad">${ICON.filter}<span>Sources</span></summary><div class="pu-source-pop"><strong>Launchpads</strong><div class="pu-lps hfade" role="group" aria-label="Launchpads"><button type="button" data-lpall>All</button>${LAUNCHPADS.map((id) => `<button type="button" data-glp="${esc(id)}" style="--lp:${lpInfo(id).color}" title="${esc(id)}"><i></i>${esc(lpInfo(id).label)}</button>`).join('')}</div></div></details>
+        <label class="pu-search">${ICON.search}<input class="pu-q" type="search" placeholder="${PH[0]}" aria-label="Filter coins on the board by name, ticker or address" spellcheck="false"></label>
         <span class="pu-health" id="pu-health"><i></i><span>Starting…</span></span>
-        <button type="button" class="pu-btn" data-watchonly aria-pressed="false" aria-label="Show saved coins" title="Show only coins in your watchlist">☆ <span>Saved</span></button>
-        <button type="button" class="pu-btn pu-ic" data-retryimages title="Retry missing token images" aria-label="Retry missing token images">↻</button>
+        <span class="pu-tools">
+          <button type="button" class="pu-btn pu-saved" data-watchonly aria-pressed="false" aria-label="Show saved coins only" title="Show only coins in your watchlist"></button>
+          <button type="button" class="pu-btn pu-ic" data-retryimages title="Retry missing token images" aria-label="Retry missing token images">${IC.retry}</button>
+          <button type="button" class="pu-btn pu-ic" data-sound></button>
+          <button type="button" class="pu-btn pu-ic" data-keys title="Keyboard shortcuts" aria-label="Keyboard shortcuts">${IC.keys}</button>
+          <button type="button" class="pu-btn pu-ic" data-bl title="Blacklist: hidden coins, dev wallets, keywords and X handles" aria-label="Blacklist">${IC.ban}<b id="pu-bln"></b></button>
+        </span>
         <button type="button" class="pu-btn pu-rapid" data-rapid title="Rapid mode: hover a card for instant Buy and Sell buttons; B and S trade the card under the pointer">${ICON.bolt}<span>Rapid</span></button>
-        <button type="button" class="pu-btn pu-ic" data-sound></button>
-        <button type="button" class="pu-btn pu-ic" data-keys title="Keyboard shortcuts">${IC.keys}</button>
-        <button type="button" class="pu-btn" data-bl title="Hidden coins, dev wallets, keywords and X handles">${IC.ban}<span>Blacklist</span><b id="pu-bln"></b></button>
-        <button type="button" class="pu-btn" data-display title="How cards look">${IC.disp}<span>Display</span></button>
+        <button type="button" class="pu-btn pu-disp" data-display title="How cards look">${IC.disp}<span>Display</span></button>
       </div>
       <div class="pu-switch" role="tablist">${COLS.map((c) => `<button type="button" role="tab" data-mcol="${c.id}">${c.title}<b id="pu-mn-${c.id}"></b></button>`).join('')}</div>
       <div class="pu-cols">${COLS.map((c) => `<section class="pu-col" data-colid="${c.id}" aria-label="${c.title}">
-        <header class="pu-ch"><i class="pu-stage" aria-hidden="true"></i><h2>${c.title}</h2><span class="pu-n" id="pu-n-${c.id}">0</span><span class="pu-paused" id="pu-p-${c.id}" hidden>Paused</span><span class="pu-sp"></span>
+        <header class="pu-ch"><h2>${c.title}</h2><span class="pu-n" id="pu-n-${c.id}">0</span><span class="pu-paused" id="pu-p-${c.id}" hidden>Paused</span><span class="pu-sp"></span>
           <label class="pu-amt" title="Quick-buy amount for this column (empty = preset)">${ICON.bolt}<input data-amt="${c.id}" inputmode="decimal" autocomplete="off" aria-label="${c.title} quick-buy SOL"><em>SOL</em></label>
           <button type="button" class="pu-ib" data-mute="${c.id}"></button>
-          <div class="pu-sortbar"><label title="Sort ${c.title}">⇅<select data-sort="${c.id}" aria-label="Sort ${c.title}">${Object.entries(SORTS).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label><button type="button" data-pause="${c.id}" aria-label="Pause ${c.title}" aria-pressed="false" title="Pause this column">Ⅱ</button></div>
-          <button type="button" class="pu-ib pu-fb" data-filter="${c.id}" title="Filters for ${c.title}">${ICON.filter}<b id="pu-fc-${c.id}"></b></button>
+          <div class="pu-sortbar"><label title="Sort ${c.title}">${IC.sort}<select data-sort="${c.id}" aria-label="Sort ${c.title}">${Object.entries(SORTS).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></label><button type="button" data-pause="${c.id}" aria-label="Pause ${c.title}" aria-pressed="false" title="Pause this column">${IC.pause}</button></div>
+          <button type="button" class="pu-ib pu-fb" data-filter="${c.id}" title="Filters for ${c.title}" aria-label="Filters for ${c.title}">${ICON.filter}<b id="pu-fc-${c.id}"></b></button>
         </header>
         <div class="pu-list" id="pu-l-${c.id}"></div>
       </section>`).join('')}</div>
@@ -107,12 +127,12 @@ register({
       const rb = $('[data-rapid]', root); rb.classList.toggle('on', S.rapid); $('span', rb).textContent = S.rapid ? `Rapid · ${preset().name}` : 'Rapid';
       root.classList.toggle('rapid', S.rapid);
       $('#pu-bln').textContent = BL.size() || '';
-      q.hidden = !S.disp.search;
-      const saved = $('[data-watchonly]', root); saved.classList.toggle('on', S.onlyWatched); saved.setAttribute('aria-pressed', String(S.onlyWatched));
+      $('.pu-search', root).hidden = !S.disp.search;
+      const saved = $('[data-watchonly]', root); saved.innerHTML = IC.star(S.onlyWatched) + '<span>Saved</span>'; saved.classList.toggle('on', S.onlyWatched); saved.setAttribute('aria-pressed', String(S.onlyWatched));
       for (const c of COL_IDS) {
-        const sort = $(`[data-sort="${c}"]`, root); sort.value = SORTS[S.sorts[c]] ? S.sorts[c] : 'newest';
+        const sort = $(`[data-sort="${c}"]`, root); sort.value = SORTS[S.sorts[c]] ? S.sorts[c] : sortDefault(c); sort.parentElement.classList.toggle('on', sort.value !== sortDefault(c)); sort.parentElement.title = `Sort ${COLS.find((x) => x.id === c).title}: ${SORTS[sort.value]}`;
         const pause = $(`[data-pause="${c}"]`, root), held = S.paused.has(c);
-        pause.textContent = held ? '▶' : 'Ⅱ'; pause.setAttribute('aria-pressed', String(held)); pause.setAttribute('aria-label', `${held ? 'Resume' : 'Pause'} ${COLS.find((x) => x.id === c).title}`);
+        pause.innerHTML = held ? IC.play : IC.pause; pause.classList.toggle('on', held); pause.setAttribute('aria-pressed', String(held)); pause.setAttribute('aria-label', `${held ? 'Resume' : 'Pause'} ${COLS.find((x) => x.id === c).title}`);
         const n = activeCount(S.filters[c]); $('#pu-fc-' + c).textContent = n || ''; $(`[data-filter="${c}"]`, root).classList.toggle('on', n > 0);
         const m = $(`[data-mute="${c}"]`, root); m.innerHTML = IC.bell(S.mute[c]); m.title = S.mute[c] ? 'This column is muted' : 'Sound for this column';
         m.classList.toggle('off', !!S.mute[c]); m.hidden = !settings.sounds;
@@ -124,7 +144,7 @@ register({
     // ---- rendering: keyed, so unchanged cards (and their loaded pictures) stay put ----
     const tpl = document.createElement('template');
     const toEl = (html) => { tpl.innerHTML = html.trim(); return tpl.content.firstElementChild; };
-    const cardOpts = (col) => ({ col, qb: amountFor(col), qbSize: S.disp.qbSize, ms: S.disp.ms, compact: settings.compact, circle: S.disp.circle, ring: S.disp.ring, grey: S.disp.grey, nodec: S.disp.nodec, detail: S.disp.detail, actions: true, rapid: S.rapid, star: true });
+    const cardOpts = (col) => ({ col, size: S.disp.size, qb: amountFor(col), qbSize: S.disp.qbSize, ms: S.disp.ms, compact: settings.compact, circle: S.disp.circle, ring: S.disp.ring, grey: S.disp.grey, nodec: S.disp.nodec, detail: S.disp.detail, actions: true, rapid: S.rapid, star: true });
     function emptyHtml(col, bucketSize) {
       const f = S.filters[col], n = activeCount(f);
       if (S.onlyWatched) return '<div class="pu-empty"><b>No saved coins in this column</b><span>Star a coin to keep it on your watchlist.</span><button type="button" class="btn btn-ghost" data-watchonly>Show all coins</button></div>';
@@ -170,12 +190,15 @@ register({
     }
     function render() {
       if (!root.isConnected || document.hidden) return;
+      let holdUntil = Infinity;
       const qq = S.q.trim().toLowerCase(), glp = S.lps, watched = new Set(watchMints()), buckets = Object.fromEntries(COL_IDS.map((c) => [c, []]));
       for (const t of all()) buckets[t.pulseCol]?.push(t);
       for (const c of COLS) {
-        const mode = SORTS[S.sorts[c.id]] ? S.sorts[c.id] : 'newest';
+        const mode = SORTS[S.sorts[c.id]] ? S.sorts[c.id] : sortDefault(c.id);
         const pass = compile(S.filters[c.id]), rows = [], b = buckets[c.id].sort(mode === 'newest' ? c.sort : (a, b) => (sortValue(b, mode) ?? -Infinity) - (sortValue(a, mode) ?? -Infinity) || c.sort(a, b));
         for (const t of b) {
+          // A launch younger than HOLD_MS appears once its picture is ready (Display → New coins).
+          if (c.id === 'new' && S.disp.holdPic && !cache.new.has(t.mint) && Date.now() - (t.created || 0) < HOLD_MS && !imageReady(t)) { holdUntil = Math.min(holdUntil, t.created + HOLD_MS); continue; }
           if (S.onlyWatched && !watched.has(t.mint)) continue;
           if (glp.length && !glp.includes(t.launchpad) && !glp.includes(t.metaLaunchpad)) continue;
           if (qq && !`${t.name || ''} ${t.symbol || ''} ${t.mint}`.toLowerCase().includes(qq)) continue;
@@ -198,7 +221,8 @@ register({
             cached.img = key;
           }
           const waiting = rows.filter(([t]) => !cache[c.id].has(t.mint)).length;
-          pe.hidden = false; pe.textContent = waiting ? `Paused · ${waiting} new` : 'Paused';
+          // in a narrow header only the " · N new" part gives way, so "Paused" itself stays whole
+          pe.hidden = false; pe.innerHTML = waiting ? `Paused<span> · ${Number(waiting)} new</span>` : 'Paused';
           continue;
         }
         pe.hidden = true;
@@ -206,6 +230,7 @@ register({
       }
       markSel();
       S.quiet = false; S.force = false;
+      if (holdUntil < Infinity) { clearTimeout(S.holdTimer); S.holdTimer = setTimeout(render, Math.max(0, holdUntil - Date.now()) + 5); }
     }
     // after a change the person made (filters, chips, display): redraw quietly, even a column the mouse is holding
     const rerender = () => { S.quiet = true; S.force = true; render(); };
@@ -296,13 +321,15 @@ register({
       if (onClick) pop.addEventListener('click', onClick);
       return pop;
     }
-    const seg = (key, opts, cur) => `<div class="seg2">${opts.map(([v, l]) => `<button type="button" data-dk="${key}" data-dv="${v}" class="${String(v) === String(cur) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    const seg = (key, opts, cur) => `<div class="seg-fill c${opts.length}"><div class="seg sm" role="group">${opts.map(([v, l]) => `<button type="button" data-dk="${key}" data-dv="${v}" class="${String(v) === String(cur) ? 'on' : ''}" aria-pressed="${String(v) === String(cur)}">${l}</button>`).join('')}</div></div>`;
     function displayHtml() {
       const d = S.disp;
       return `<h3>Display</h3>
+        <div class="row"><span>Card size</span>${seg('size', [['m', 'Standard'], ['l', 'Large']], d.size)}</div>
         <div class="row"><span>Rows</span>${seg('compact', [['false', 'Standard'], ['true', 'Compact']], settings.compact)}</div>
         <div class="row"><span>Metric size</span>${seg('ms', [['s', 'Small'], ['m', 'Medium'], ['l', 'Large']], d.ms)}</div>
         <div class="row"><span>Quick buy</span>${seg('qbSize', [['s', 'Small'], ['l', 'Medium'], ['m', 'Large'], ['u', 'XL']], d.qbSize)}</div>
+        <div class="row"><span>New coins</span>${seg('holdPic', [['true', 'With picture'], ['false', 'Instantly']], d.holdPic)}</div>
         <div class="row"><span>Pictures</span>${seg('circle', [['false', 'Square'], ['true', 'Circle']], d.circle)}</div>
         <div class="row"><span>Bonding ring</span>${seg('ring', [['true', 'On'], ['false', 'Off']], d.ring)}</div>
         <div class="row"><span>Extra metrics</span>${seg('detail', [['false', 'Off'], ['true', 'On']], d.detail)}</div>
@@ -311,7 +338,7 @@ register({
         <div class="row"><span>Search bar</span>${seg('search', [['false', 'Off'], ['true', 'On']], d.search)}</div>
         <div class="row"><span>Hidden coins</span>${seg('showHidden', [['false', 'Hide'], ['true', 'Show dimmed']], d.showHidden)}</div>
         <div class="row"><span>On migration</span>${seg('unhideMigrate', [['true', 'Unhide'], ['false', 'Keep hidden']], d.unhideMigrate)}</div>
-        <div class="row"><span>Volume</span><input type="range" min="0" max="100" step="5" value="${Math.round((alerts ? alerts.prefs().volume : d.vol) * 100)}" data-vol aria-label="${alerts ? 'Master volume for all Nought sounds' : 'Sound volume'}"></div>
+        <div class="row"><span>Volume</span><input type="range" class="range" min="0" max="100" step="5" value="${Math.round((alerts ? alerts.prefs().volume : d.vol) * 100)}" style="--v:${Math.round((alerts ? alerts.prefs().volume : d.vol) * 100)}%" data-vol aria-label="${alerts ? 'Master volume for all Nought sounds' : 'Sound volume'}"></div>
         <p class="hint">${alerts ? 'Volume is the master volume every Nought sound shares (Settings, Alerts). ' : ''}Saved in this browser.</p>`;
     }
     function onDisplayClick(e) {
@@ -323,7 +350,7 @@ register({
     }
     function bindVol() {
       const r = pop?.querySelector('[data-vol]'); if (!r) return;
-      r.addEventListener('input', () => { const v = Number(r.value) / 100; if (alerts) alerts.setPrefs({ volume: v }); else { S.disp.vol = v; LS.set('pulse.display', S.disp); } });
+      r.addEventListener('input', () => { const v = Number(r.value) / 100; r.style.setProperty('--v', r.value + '%'); if (alerts) alerts.setPrefs({ volume: v }); else { S.disp.vol = v; LS.set('pulse.display', S.disp); } });
       r.addEventListener('change', () => { armed = true; beep('new', true); });
     }
     const KEYS = [['J / K', 'Move down / up a column'], ['Enter', 'Open the selected coin'], ['H', 'Hide the coin under the pointer'], ['B', 'Buy it (Rapid mode)'], ['S', 'Sell your preset share of it (Rapid mode)'], ['Esc', 'Clear the selection'], ['1 2 3', 'Switch preset'], ['/', 'Search']];
@@ -357,7 +384,7 @@ register({
       const kb = t.closest('[data-keys]'); if (kb) { kb.dataset.for = 'keys'; openPop(kb, keysHtml()); return; }
     });
     root.addEventListener('change', (e) => {
-      const sort = e.target.closest('[data-sort]'); if (sort) { if (SORTS[sort.value]) { S.sorts[sort.dataset.sort] = sort.value; LS.set('pulse.sorts', S.sorts); rerender(); } return; }
+      const sort = e.target.closest('[data-sort]'); if (sort) { if (SORTS[sort.value]) { S.sorts[sort.dataset.sort] = sort.value; LS.set('pulse.sorts2', S.sorts); chrome(); rerender(); } return; }
       const inp = e.target.closest('[data-amt]'); if (!inp) return;
       const c = inp.dataset.amt, raw = inp.value.trim(), v = parseAmount(raw); // "0,5" is 0.5 SOL, never 5
       if (!COL_IDS.includes(c)) return;
@@ -368,6 +395,16 @@ register({
     });
     root.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.closest('[data-amt]')) e.target.blur(); });
     q.addEventListener('input', () => { S.q = q.value; rerender(); });
+    // the launchpad strip scrolls sideways when the header is narrow: a plain mouse wheel moves it too, and the edge
+    // that hides chips fades out
+    const lps = $('.pu-lpi', root);
+    lps.addEventListener('wheel', (e) => { if (!e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY) || lps.scrollWidth <= lps.clientWidth + 1) return; e.preventDefault(); lps.scrollLeft += e.deltaY; }, { passive: false });
+    const lpFade = () => { const max = lps.scrollWidth - lps.clientWidth; lps.classList.toggle('fl', lps.scrollLeft > 1); lps.classList.toggle('fr', max - lps.scrollLeft > 1); };
+    lps.addEventListener('scroll', lpFade, { passive: true });
+    const phCtx = document.createElement('canvas').getContext('2d');
+    const fitPh = () => { if (!q.clientWidth) return; const cs = getComputedStyle(q); phCtx.font = cs.font; const room = q.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 18; q.placeholder = PH.find((p) => phCtx.measureText(p).width <= room) || PH[PH.length - 1]; };
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { lpFade(); fitPh(); }) : null;
+    ro?.observe(lps); ro?.observe(q);
     // fresh-row flash plays once: drop the class so a later reorder does not replay it
     root.addEventListener('animationend', (e) => e.target.classList?.remove('fresh'));
     // a column holds still while the mouse is on it (pointer type check: taps on phones must not freeze a column)
@@ -380,13 +417,10 @@ register({
 
     const onDocClick = (e) => {
       const u = e.target.closest?.('[data-pu-undo]'); if (u) { BL.remove('mint', u.dataset.puUndo); u.closest('.toast')?.remove(); return; }
-      const sources = $('.pu-sources', root); if (sources?.open && !e.composedPath().includes(sources)) sources.open = false;
       if (pop && !e.composedPath().includes(pop) && !e.target.closest?.('[data-display], [data-keys]')) closePop(); // composedPath: the menu re-renders under the click
     };
     const onKey = (e) => {
       if (e.key === 'Escape' && pop) { closePop(); return; }
-      const sources = $('.pu-sources', root);
-      if (e.key === 'Escape' && sources?.open) { sources.open = false; $('summary', sources).focus(); e.preventDefault(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]')) return;
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       if (k === 'g') { S.gAt = Date.now(); return; }
@@ -434,6 +468,8 @@ register({
     chrome(); render();
     const offs = [
       on('tokens', render), on('feed', render), on('sol', render),
+      // pictures finishing in a burst redraw once per frame
+      on('token-image-ready', () => { if (!S.readyFrame) S.readyFrame = requestAnimationFrame(() => { S.readyFrame = 0; render(); }); }),
       on('new-token', t => {
         if (document.hidden || !root.isConnected || (innerWidth <= 760 && S.mobile !== 'new') || $('#pu-l-new').scrollTop > 100) return;
         if (S.paused.has('new') || S.hovered.has('new') || ((S.popHold || S.socialHold) && S.lastCol === 'new')) return;
@@ -450,7 +486,7 @@ register({
     ];
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
-      clearInterval(timer); offs.forEach((f) => f()); detachHover(); document.removeEventListener('nought-social-hover', socialHold); closePop();
+      ro?.disconnect(); clearInterval(timer); clearTimeout(S.holdTimer); cancelAnimationFrame(S.readyFrame); offs.forEach((f) => f()); detachHover(); document.removeEventListener('nought-social-hover', socialHold); closePop();
       document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onKey);
       document.removeEventListener('pointerdown', arm, { capture: true }); document.removeEventListener('keydown', arm, { capture: true });
       try { actx?.close(); } catch { /* closed */ }

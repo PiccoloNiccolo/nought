@@ -7,7 +7,8 @@
 //   prefs(), setPrefs(patch), SOUNDS, enableDesktop()
 //   listAlerts(), addAlert({mint, kind: 'mc'|'price', op: 'above'|'below', value}), removeAlert(id), rearmAlert(id),
 //   alertQuote(mint) → {price, mc} (last checked)
-//   popover(button, panel, {menu, onOpen}) small accessible popover/menu helper (shell uses it for the wallet menu)
+//   popover(button, panel, {menu, onOpen, onClose}) small accessible popover/menu helper (shell uses it for the wallet
+//                        menu); open(focusFirst, from) can name another opener than button
 // Core already toasts trade fills and order states, so for those this module only logs, plays a sound and (when the
 // tab is in the background) raises a desktop notification; after a fill it adds a position toast with Sell actions.
 // Other modules can announce things with emit('tracker-trade', {wallet, name, emoji, mint, symbol, side, sol, sig,
@@ -31,7 +32,7 @@ const cap = (s) => String(s || '').charAt(0).toUpperCase() + String(s || '').sli
 const SIG = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
 
 // ---- preferences ----
-export const SOUNDS = { fills: 'Trade fills', orders: 'Order triggers and fills', tracker: 'Tracked wallet trades', alerts: 'Price and market-cap alerts', pulse: 'New pairs on Pulse' };
+export const SOUNDS = { fills: 'Trade fills', orders: 'Order triggers and fills', tracker: 'Tracked wallet trades', alerts: 'Price and market-cap alerts', pulse: 'New pairs on Scope' };
 const DEF = { desktop: false, volume: 0.5, positionToasts: true, sounds: { fills: true, orders: true, tracker: true, alerts: true } };
 // read field by field: the stored object may come from an old version or a hand-edited file
 export function prefs() {
@@ -272,17 +273,23 @@ function onTracker(t) {
 const pops = new Set();
 export function popover(btn, panel, { menu = false, onOpen, onClose } = {}) {
   const wrap = btn.parentElement;
-  const items = () => [...panel.querySelectorAll(menu ? '[role="menuitem"]:not([disabled])' : 'a[href], button:not([disabled]), [tabindex="0"]')];
+  const items = () => [...panel.querySelectorAll(menu ? '[role^="menuitem"]:not([disabled])' : 'a[href], button:not([disabled]), [tabindex="0"]')];
   const isOpen = () => !panel.hidden;
-  function open(focusFirst = false) {
+  // from: another control that opens the same panel (the status bar's wallet chip); it gets aria-expanded and focus
+  // back on close instead of btn, until the panel closes
+  let owner = btn;
+  function open(focusFirst = false, from = btn) {
     pops.forEach((p) => p !== api && p.close(false));
-    onOpen?.(); panel.hidden = false; btn.setAttribute('aria-expanded', 'true');
+    if (owner !== from) owner.setAttribute('aria-expanded', 'false');
+    owner = from;
+    onOpen?.(); panel.hidden = false; owner.setAttribute('aria-expanded', 'true');
     if (focusFirst) (items()[0] || panel).focus?.();
   }
   function close(refocus = true) {
     if (panel.hidden) return;
-    panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); onClose?.();
-    if (refocus) btn.focus();
+    const o = owner; owner = btn;
+    panel.hidden = true; o.setAttribute('aria-expanded', 'false'); onClose?.();
+    if (refocus) o.focus();
   }
   btn.addEventListener('click', (e) => { if (isOpen()) close(false); else open(e.detail === 0); }); // detail 0 = keyboard
   btn.addEventListener('keydown', (e) => {

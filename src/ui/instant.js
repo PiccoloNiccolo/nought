@@ -4,9 +4,9 @@
 // comes back on the next one if you left it open.
 //   openInstant(mint) · closeInstant() · toggleInstant(mint) · detachInstant() · instantOpen()
 // Shared with the token page's trade panel:
-//   buyAcross(mint, totalSol, opts)   splits the amount evenly over tradeOwners() (selected local wallets, else the
-//                                     active wallet) and buys from each in turn → number of fills that confirmed
-//   sellAcross(mint, pct, opts)       each wallet sells pct% of its own balance → number of fills that confirmed
+//   buyAcross(mint, sol, opts)        buys on every tradeOwners() wallet (selected local wallets, else the active one)
+//                                     AT ONCE: sol each, or sol split evenly (multiMode() in core/trade.js) → fills
+//   sellAcross(mint, pct, opts)       every wallet sells pct% of its own balance at once → number of fills that confirmed
 //                                     Both take opts.quoted = {raw, minOutRaw, impactPct}: the quote shown for one leg.
 //                                     Every leg then carries a minimum (legMin) and an impact cap (25% by default).
 //   quotedMin(q)                      the guaranteed minimum (raw string) of a swap/v1 quote or an Ultra order
@@ -18,7 +18,7 @@
 import { esc, LS, on, usd, num, short, toast, parseAmount } from '../core/util.js';
 import { settings, set as setSettings, preset, PRIO } from '../core/settings.js';
 import { wallet, needWallet, tradeOwners } from '../core/wallet.js';
-import { trade, holding, tradeLog, decimalsOf, confirm, txLink } from '../core/trade.js';
+import { trade, holding, tradeLog, decimalsOf, confirm, txLink, perWalletSol } from '../core/trade.js';
 import { jx } from '../core/jup.js';
 import { tokens, mcUsd } from '../core/store.js';
 import { solUsd } from '../core/price.js';
@@ -73,13 +73,17 @@ export async function loadPosition(mint, { force = false } = {}) {
     Promise.all(owners.map((o) => fillsFor(mint, o, force).catch(() => []))),
     Promise.all(owners.map((o) => holding(mint, o).catch(() => null))),
   ]);
-  let boughtSol = 0, soldSol = 0, buys = 0, sells = 0, holdUi = 0, holdKnown = true;
-  for (const f of fills.flat()) { if (f.side === 'buy') { boughtSol += f.sol; buys++; } else { soldSol += f.sol; sells++; } }
+  let boughtSol = 0, soldSol = 0, buys = 0, sells = 0, holdUi = 0, holdKnown = true, boughtTok = 0, soldTok = 0;
+  for (const f of fills.flat()) { if (f.side === 'buy') { boughtSol += f.sol; buys++; boughtTok += Number(f.tokens) || 0; } else { soldSol += f.sol; sells++; soldTok += Number(f.tokens) || 0; } }
   for (const h of holds) { if (h) holdUi += h.ui; else holdKnown = false; }
   const pUsd = priceUsdOf(tokens.get(mint)), s = solUsd();
   const holdUsd = pUsd ? holdUi * pUsd : null, holdSol = holdUsd != null && s > 0 ? holdUsd / s : null;
   const pnlSol = holdSol != null ? soldSol + holdSol - boughtSol : null;
-  return { owners: owners.length, more: tradeOwners().length - owners.length, boughtSol, soldSol, buys, sells, holdUi, holdKnown, holdUsd, holdSol, pnlSol, pnlUsd: pnlSol != null && s > 0 ? pnlSol * s : null, pnlPct: pnlSol != null && boughtSol > 0 ? (pnlSol / boughtSol) * 100 : null, raws: holds };
+  // average entry and exit as market caps (SOL per token × supply × SOL price), like Axiom shows them
+  const t = tokens.get(mint), supply = Number(t?.totalSupply) || Number(t?.circSupply) || (/pump$/.test(mint) ? 1e9 : 0);
+  const mcOf = (sol, tok) => (tok > 0 && sol > 0 && supply > 0 && s > 0 ? (sol / tok) * supply * s : null);
+  const avgEntryMc = mcOf(boughtSol, boughtTok), avgExitMc = mcOf(soldSol, soldTok);
+  return { avgEntryMc, avgExitMc, owners: owners.length, more: tradeOwners().length - owners.length, boughtSol, soldSol, buys, sells, holdUi, holdKnown, holdUsd, holdSol, pnlSol, pnlUsd: pnlSol != null && s > 0 ? pnlSol * s : null, pnlPct: pnlSol != null && boughtSol > 0 ? (pnlSol / boughtSol) * 100 : null, raws: holds };
 }
 const labelOf = (mint) => (tokens.get(mint)?.symbol ? '$' + tokens.get(mint).symbol : short(mint));
 // The guaranteed minimum of a quote in raw output units, as trade() measures a fresh one (contract C2): swap/v1's
@@ -127,24 +131,22 @@ const legErr = async (e, owners, owner, what) => {
   if (r == null) toast(`${who ? esc(who) + ': ' : ''}${esc(e?.message || `The ${what} did not go through.`)}`, 'err');
   return r === 'ok';
 };
-export async function buyAcross(mint, totalSol, opts = {}) {
+// Legs run in parallel, so any of them may land after all the others: each leg's minimum allows for the price
+// impact of the other n-1 legs (legDrift), within the impact cap.
+const parallelLegs = async (owners, run) => (await Promise.all(owners.map(run))).filter((st) => st === 'ok').length;
+export async function buyAcross(mint, sol, opts = {}) {
   const owners = tradeOwners();
   if (!owners.length) { needWallet(); return 0; }
-  if (!(totalSol > 0) || !isFinite(totalSol)) throw new Error('Enter an amount of SOL.');
-  const each = BigInt(Math.floor((totalSol / owners.length) * 1e9));
+  if (!(sol > 0) || !isFinite(sol)) throw new Error('Enter an amount of SOL.');
+  const each = BigInt(Math.round(perWalletSol(sol, owners.length) * 1e9)); // nearest lamport: 0.6 / 3 is 0.19999… in floats
   if (each <= 0n) throw new Error('That amount is too small to split.');
   const { quoted, ...o } = opts;
   if (o.maxImpactPct == null) o.maxImpactPct = 25;
-  let ok = 0, drift = 0;
-  for (const owner of owners) {
-    const minOutRaw = legMin(quoted, each, drift);
-    let st = 'failed';
-    try { st = await leg('buy', mint, each, { ...o, owner, ...(minOutRaw && { minOutRaw }) }); }
-    catch (e) { st = (await legErr(e, owners, owner, 'buy')) ? 'ok' : 'failed'; }
-    if (st === 'ok') { ok++; drift += legDrift(quoted, each); }
-    if (st === 'aborted') break; // the price moved past the quote: the other wallets would be refused the same way
-  }
-  return ok;
+  const minOutRaw = legMin(quoted, each, (owners.length - 1) * legDrift(quoted, each));
+  return parallelLegs(owners, async (owner) => {
+    try { return await leg('buy', mint, each, { ...o, owner, ...(minOutRaw && { minOutRaw }) }); }
+    catch (e) { return (await legErr(e, owners, owner, 'buy')) ? 'ok' : 'failed'; }
+  });
 }
 // each wallet sells pct% (0–100] of its own balance (the same checks as core sellPct, which this replaces so each leg
 // can carry its own minimum)
@@ -155,21 +157,19 @@ export async function sellAcross(mint, pct, opts = {}) {
   if (!(p > 0)) throw new Error('Pick how much to sell.');
   const { quoted, ...o } = opts;
   if (o.maxImpactPct == null) o.maxImpactPct = 25;
-  let ok = 0, drift = 0;
-  for (const owner of owners) {
-    let st = 'failed', raw = 0n;
+  const many = owners.length > 1; let skipped = 0;
+  const ok = await parallelLegs(owners, async (owner) => {
     try {
       const h = await holding(mint, owner);
       if (h.frozen) throw new Error('This coin is frozen in your wallet, so it cannot be sold.');
-      if (!(h.raw > 0n)) throw new Error('You hold none of this coin.');
-      raw = p >= 100 ? h.raw : (h.raw * BigInt(Math.round(p * 100))) / 10000n;
+      if (!(h.raw > 0n)) { if (many) { skipped++; return 'skipped'; } throw new Error('You hold none of this coin.'); } // other wallets may
+      const raw = p >= 100 ? h.raw : (h.raw * BigInt(Math.round(p * 100))) / 10000n;
       if (raw <= 0n) throw new Error('That share of your balance rounds to zero.');
-      const minOutRaw = legMin(quoted, raw, drift);
-      st = await leg('sell', mint, raw, { ...o, owner, ...(minOutRaw && { minOutRaw }) });
-    } catch (e) { st = (await legErr(e, owners, owner, 'sale')) ? 'ok' : 'failed'; }
-    if (st === 'ok') { ok++; drift += legDrift(quoted, raw); }
-    if (st === 'aborted' && quoted) break; // the price moved past the quote: the other wallets would be refused too
-  }
+      const minOutRaw = legMin(quoted, raw, (owners.length - 1) * legDrift(quoted, raw));
+      return await leg('sell', mint, raw, { ...o, owner, ...(minOutRaw && { minOutRaw }) });
+    } catch (e) { return (await legErr(e, owners, owner, 'sale')) ? 'ok' : 'failed'; }
+  });
+  if (many && skipped === owners.length) toast('None of your selected wallets hold this coin.', 'err');
   return ok;
 }
 
@@ -212,15 +212,20 @@ function draw() {
   if (!st.el) return;
   const c = chips(), t = tokens.get(st.mint) || {}, p = preset(), owners = tradeOwners().length;
   const sym = t.symbol ? '$' + t.symbol : short(st.mint);
+  // header (drag handle, coin, edit, close), preset tabs, a Buy row and a Sell row of four amounts each, the position
+  // line and a footer with the fee, the preset's settings and the wallet
   st.el.innerHTML = `
     <div class="it-bar" title="Drag to move">
-      <span class="it-grip" aria-hidden="true">⋮⋮</span><b class="it-sym">${esc(sym)}</b>
-      <div class="it-pre">${settings.presets.map((x, i) => `<button type="button" data-pre="${i}" class="${i === settings.preset ? 'on' : ''}" title="${esc(x.name)}: ${esc(String(x.slippage))}% slippage · ${esc(PRIO[x.prio]?.label || '')}">${esc(x.name)}</button>`).join('')}</div>
-      <button type="button" class="it-ic${st.editing ? ' on' : ''}" data-act="edit" title="${st.editing ? 'Done editing' : 'Edit amounts'}" aria-label="Edit amounts">✎</button>
-      <button type="button" class="it-ic" data-act="close" title="Close (i)" aria-label="Close">×</button>
+      <span class="it-grip" aria-hidden="true"><svg viewBox="0 0 24 24" width="12" height="12"><path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg></span>
+      <span class="it-title">Instant trade</span><b class="it-sym">${esc(sym)}</b>
+      <button type="button" class="it-ic${st.editing ? ' on' : ''}" data-act="edit" title="${st.editing ? 'Done editing' : 'Edit amounts'}" aria-label="${st.editing ? 'Done editing amounts' : 'Edit amounts'}">${st.editing ? '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4ZM13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>'}</button>
+      <button type="button" class="it-ic" data-act="close" title="Close (i)" aria-label="Close"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
     </div>
-    <div class="it-row"><span class="it-k up">Buy</span>${c.buy.map((v, i) => (st.editing ? `<input class="it-in" data-buy="${i}" inputmode="decimal" value="${esc(String(v))}" aria-label="Buy amount ${i + 1} in SOL">` : `<button type="button" class="it-b buy" data-buy="${i}" ${st.busy ? 'disabled' : ''} title="Buy ${esc(String(v))} SOL of ${esc(sym)}${owners > 1 ? `, split over ${owners} wallets` : ''}">${esc(String(v))}</button>`)).join('')}<span class="it-u">SOL</span></div>
-    <div class="it-row"><span class="it-k down">Sell</span>${c.sell.map((v, i) => (st.editing ? `<input class="it-in" data-sell="${i}" inputmode="decimal" value="${esc(String(v))}" aria-label="Sell share ${i + 1} in percent">` : `<button type="button" class="it-b sell" data-sell="${i}" ${st.busy ? 'disabled' : ''} title="Sell ${esc(String(v))}% of your ${esc(sym)}${owners > 1 ? ` in each of ${owners} wallets` : ''}">${esc(String(v))}%</button>`)).join('')}<span class="it-u">&nbsp;</span></div>
+    <div class="it-pre" role="group" aria-label="Preset">${settings.presets.map((x, i) => `<button type="button" data-pre="${i}" class="${i === settings.preset ? 'on' : ''}" aria-pressed="${i === settings.preset}" title="${esc(x.name)}: ${esc(String(x.slippage))}% slippage · ${esc(PRIO[x.prio]?.label || '')}">${esc(x.name)}</button>`).join('')}</div>
+    <div class="it-h"><span class="it-k up">Buy</span><span class="it-u">SOL${owners > 1 ? ` · ${owners} wallets` : ''}</span></div>
+    <div class="it-row buy">${c.buy.map((v, i) => (st.editing ? `<input class="it-in" data-buy="${i}" inputmode="decimal" value="${esc(String(v))}" aria-label="Buy amount ${i + 1} in SOL">` : `<button type="button" class="it-b buy" data-buy="${i}" ${st.busy ? 'disabled' : ''} title="Buy ${esc(String(v))} SOL of ${esc(sym)}${owners > 1 ? `, split over ${owners} wallets` : ''}">${esc(String(v))}</button>`)).join('')}</div>
+    <div class="it-h"><span class="it-k down">Sell</span><span class="it-u">% of holding</span></div>
+    <div class="it-row sell">${c.sell.map((v, i) => (st.editing ? `<input class="it-in" data-sell="${i}" inputmode="decimal" value="${esc(String(v))}" aria-label="Sell share ${i + 1} in percent">` : `<button type="button" class="it-b sell" data-sell="${i}" ${st.busy ? 'disabled' : ''} title="Sell ${esc(String(v))}% of your ${esc(sym)}${owners > 1 ? ` in each of ${owners} wallets` : ''}">${esc(String(v))}%</button>`)).join('')}</div>
     <div class="it-pos mono" data-pos>${posHtml()}</div>
     <div class="it-foot"><span class="up">Nought fee 0%</span><span>${esc(String(p.slippage))}% slip · ${esc(PRIO[p.prio]?.label || '')}${p.mev === 'protected' ? ' · Ultra' : ''}</span><span>${wallet.owner ? (owners > 1 ? `${owners} wallets` : esc(short(tradeOwners()[0] || wallet.owner))) : 'No wallet'}</span></div>`;
 }

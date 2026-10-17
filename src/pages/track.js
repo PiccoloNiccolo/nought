@@ -29,14 +29,18 @@ import { trade, holding, confirm, tradeLog, SOL_MINT } from '../core/trade.js';
 import * as V from '../core/vault.js';
 import * as logs from '../core/logs.js';
 import { avatar, qbButton } from '../ui/card.js';
+import { loadKols, kolPic } from '../core/kols.js';
+import { edgeFade } from '../ui/edge-fade.js';
 
 const KEY = 'tracked', COPY_KEY = 'tracked.copy', SPENT_KEY = 'tracked.copy.spent', CLOG_KEY = 'tracked.copy.log';
 const GUARD_KEY = 'tracked.copy.guard', HELD_KEY = 'tracked.copy.held';
 const liveStatus = () => logs.status();
 // a toast is a grid: one wrapper keeps "Copying <b>name</b>: …" on one line instead of a row per element
 const toast = (html, kind) => toastRaw(`<span>${html}</span>`, kind);
-const MAX_TRACKED = 10000, MONITOR_MAX = 200;
-const TABS = [['wallets', 'Wallets'], ['live', 'Live'], ['monitor', 'Monitor'], ['vision', 'Vision']];
+const MAX_TRACKED = 10000, MONITOR_MAX = 200, KOL_FIRST = 20;
+const TABS = [['wallets', 'Wallets'], ['live', 'Live'], ['monitor', 'Overlap'], ['vision', 'Explore']];
+// the address each view shows (#/track/overlap, #/track/explore); the old #/track/monitor and #/track/vision still open them
+const SLUG = { monitor: 'overlap', vision: 'explore' }, UNSLUG = { overlap: 'monitor', explore: 'vision' };
 const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', USDT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
 const SKIP = new Set([SOL_MINT, USDC, USDT]);
 const TOG = { feed: 'Show this wallet\'s trades in Live', alert: 'Pop a notice on any page when it trades', sound: 'Play a sound when it trades' };
@@ -65,7 +69,31 @@ const IC = {
   overlap: svg('<circle cx="9" cy="12" r="5.5"/><circle cx="15" cy="12" r="5.5"/>'),
   scan: svg('<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M12 8.5v4M12 15.5v.01"/>'),
   chev: svg('<path d="m7 10 5 5 5-5"/>', 13),
+  feed: svg('<path d="M5 5a14 14 0 0 1 14 14M5 11a8 8 0 0 1 8 8"/><circle cx="6" cy="18" r="1.4" fill="currentColor"/>', 15),
+  alert: svg('<path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15L6 16Zm4 4a2 2 0 0 0 4 0"/>', 15),
+  sound: svg('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>', 15),
+  edit: svg('<path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/>', 14),
+  trash: svg('<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l.8 12.5h9.4L17.5 7"/><path d="M10 11v5M14 11v5"/>', 14),
 };
+// the Solana mark, one colour: SOL amounts in the tables
+const SOLI = '<svg class="trk-sol" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M6.6 4.5h14.2l-3.4 3.6H3.2zM3.2 10.2h14.2l3.4 3.6H6.6zM6.6 15.9h14.2l-3.4 3.6H3.2z"/></svg>';
+// win share as a small half-donut: green for coins closed in profit, red for the rest
+const gauge = (w, n) => (n > 0 ? `<svg class="trk-g" viewBox="0 0 24 13" width="24" height="13" aria-hidden="true"><path class="l" d="M3 12a9 9 0 0 1 18 0" pathLength="100"/><path class="w" d="M3 12a9 9 0 0 1 18 0" pathLength="100" stroke-dasharray="${((w / n) * 100).toFixed(1)} 100"/></svg>` : '');
+// KOL pictures for wallets on the public list (data/kol-wallets.json), once it has loaded
+let kolBy = null;
+const kolsReady = () => loadKols().then((k) => { kolBy = k.by || new Map(); return kolBy; }).catch(() => (kolBy = new Map()));
+// a wallet's tile: its emoji, else its picture from the public list, else a dot. A picture that fails to load is
+// removed by the page's error listener, and the initial under it shows. Only list-hosted pictures here (no X avatar
+// lookup by handle), so tracking a listed wallet does not tell a third-party host about it.
+function tile(emoji, addr, name) {
+  if (emoji) return esc(emoji);
+  const k = kolBy?.get(addr), pic = k?.pfp || '';
+  return pic ? `<span class="ini" aria-hidden="true">${esc(ini(name || k.name))}</span><img class="trk-pic" src="${esc(pic)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<i></i>';
+}
+// a name's first character (a whole emoji, not half of one), upper-cased
+function ini(s) { return (Array.from(String(s || '').trim())[0] || '?').toUpperCase(); }
+// an unnamed wallet that is on the public list shows the list's name (the same one its picture belongs to)
+const kolName = (addr) => kolBy?.get(addr)?.name || '';
 // every argument is our own copy (numbers at most); callers esc() anything else first
 function emptyHtml({ ic = '', title, body = '', steps = [], acts = '', cls = '' }) {
   return `<div class="empty-state trk-es ${cls}">${ic ? `<span class="es-ic">${IC[ic]}</span>` : ''}<h3>${title}</h3>${body ? `<p>${body}</p>` : ''}${steps.length ? `<ol class="es-steps">${steps.map((s) => `<li>${s}</li>`).join('')}</ol>` : ''}${acts ? `<div class="es-acts">${acts}</div>` : ''}</div>`;
@@ -73,14 +101,14 @@ function emptyHtml({ ic = '', title, body = '', steps = [], acts = '', cls = '' 
 // the real header of each table, so its preview (and its loading rows) line up with what will come
 const HEAD = {
   tw: `<th>Wallet</th><th>Group</th><th class="r">Balance</th><th class="r">Last active</th><th class="c" title="${TOG.feed}">Feed</th><th class="c" title="${TOG.alert}">Alert</th><th class="c" title="${TOG.sound}">Sound</th><th class="c" title="Copy trading (off by default)">Copy</th><th></th>`,
-  tl: '<th>Time</th><th>Wallet</th><th>Side</th><th>Token</th><th class="r">SOL</th><th class="r">MC at fill</th><th class="c">Tx</th><th class="c">Buy</th>',
+  tl: '<th>Time</th><th>Wallet</th><th>Side</th><th>Token</th><th>SOL</th><th class="r">MC<span class="tl-long"> at fill</span></th><th class="c">Tx</th><th class="c">Buy</th>',
   tm: '<th>Token</th><th class="r">Wallets</th><th>Held by</th><th class="r">Total value</th><th class="r">MC</th><th class="c">Buy</th>',
   tv: '<th class="r">#</th><th>Wallet</th><th class="r">Realized PnL</th><th class="r">Volume</th><th class="r">Trades</th><th class="r">Coins</th><th class="r">Win rate</th><th class="c"></th>',
 };
 const sk = (c) => `<i class="skel ${c}"></i>`;
 const SKROW = {
   tw: `<td class="tw-who">${sk('sk-av')}<span class="sk-2">${sk('sk-a')}${sk('sk-s')}</span></td><td>${sk('sk-c')}</td><td class="num">${sk('sk-d')}</td><td class="num">${sk('sk-d')}</td>${['feed', 'alert', 'sound'].map((k) => `<td class="c" data-l="${k}">${sk('sk-sw')}</td>`).join('')}<td class="c" data-l="copy">${sk('sk-cp')}</td><td class="tw-act">${sk('sk-e')}</td>`,
-  tl: `<td>${sk('sk-t')}</td><td>${sk('sk-av sm')}${sk('sk-a')}</td><td>${sk('sk-side')}</td><td>${sk('sk-av sm')}${sk('sk-b')}</td><td class="num">${sk('sk-d')}</td><td class="num">${sk('sk-d')}</td><td class="c">${sk('sk-dot')}</td><td class="c">${sk('sk-qb')}</td>`,
+  tl: `<td>${sk('sk-t')}</td><td>${sk('sk-av sm')}${sk('sk-a')}</td><td>${sk('sk-side')}</td><td>${sk('sk-av sm')}${sk('sk-b')}</td><td>${sk('sk-d')}</td><td class="num">${sk('sk-d')}</td><td class="c">${sk('sk-dot')}</td><td class="c">${sk('sk-qb')}</td>`,
   tm: `<td>${sk('sk-av sm')}${sk('sk-b')}</td><td class="num">${sk('sk-t')}</td><td>${sk('sk-c')} ${sk('sk-c')}</td><td class="num">${sk('sk-d')}</td><td class="num">${sk('sk-d')}</td><td class="c">${sk('sk-qb')}</td>`,
   tv: `<td class="num">${sk('sk-t')}</td><td>${sk('sk-a')}</td><td class="num">${sk('sk-d')}</td><td class="num">${sk('sk-d')}</td><td class="num">${sk('sk-t')}</td><td class="num">${sk('sk-t')}</td><td class="num">${sk('sk-d')}</td><td class="c">${sk('sk-cp')}</td>`,
 };
@@ -99,6 +127,8 @@ let list = load();
 let index = new Map(list.map((w) => [w.address, w]));
 export const trackedWallets = () => list.slice();
 export const isTracked = (a) => index.has(a);
+// one wallet from elsewhere (the Trackers panel), with its feed on → 1 when added, 0 when already tracked or full
+export const addTracked = (address, name = '') => addWallets([{ address, name, feed: true }]);
 function save() {
   LS.set(KEY, list);
   index = new Map(list.map((w) => [w.address, w]));
@@ -289,8 +319,8 @@ async function rowWork() {
   }
   lazyBusy--;
 }
-const balHtml = (b) => (!b ? '<span class="skel trk-ld"></span>' : b.err ? '<span class="dim" title="Could not load">—</span>' : `${solTxt(b.sol)} <span class="dim">SOL</span>${b.n ? `<span class="dim trk-n" title="Coins held"> · ${b.n}</span>` : ''}`);
-const actHtml = (a) => (!a ? '<span class="skel trk-ld"></span>' : a.err ? '<span class="dim" title="Could not load">—</span>' : a.ms ? `<span data-age="${a.ms}">${ago(a.ms)}</span> <span class="dim">ago</span>` : '<span class="dim"><span class="tw-long">no recent tx</span><span class="tw-short">no tx</span></span>');
+const balHtml = (b) => (!b ? '<span class="skel trk-ld"></span>' : b.err ? '<span class="dim" title="Could not load">—</span>' : `<span class="trk-solv${b.sol > 0 ? '' : ' zero'}">${SOLI}${solTxt(b.sol)}</span>${b.n ? `<span class="dim trk-n" title="Coins held"> · ${b.n}</span>` : ''}`);
+const actHtml = (a) => (!a ? '<span class="skel trk-ld"></span>' : a.err ? '<span class="dim" title="Could not load">—</span>' : a.ms ? `<span data-age="${a.ms}" title="${esc(new Date(a.ms).toLocaleString())}">${ago(a.ms)}</span>` : '<span class="dim"><span class="tw-long">no recent tx</span><span class="tw-short">no tx</span></span>');
 
 // ---- import / export ----
 function csvLine(l, d) {
@@ -355,7 +385,6 @@ function dialog(root, html, cls = '') {
 
 // ---- monitor + vision caches (kept for the session) ----
 const holdCache = new Map(); // address → {at, tokens: Map(mint → ui)}
-let kolCache = null;
 const disc = { at: 0, busy: false, rows: [], coins: [], iv: '1h', n: 6, err: '', sort: 'pnl' };
 const DSORT = {
   pnl: (a, b) => (b.closed ? b.pnl : -1e9) - (a.closed ? a.pnl : -1e9) || b.vol - a.vol,
@@ -366,21 +395,24 @@ const DSORT = {
 
 register({
   id: 'track', tab: 'track', match: /^#\/track(?:\/([a-z]+))?$/,
-  title: ([sub]) => `${sub === 'vision' ? 'Vision' : 'Trackers'} · Nought`,
+  title: ([sub]) => `${sub === 'vision' || sub === 'explore' ? 'Explore' : 'Trackers'} · Nought`,
   mount(view, [sub]) {
+    sub = UNSLUG[sub] || sub;
     const tab = TABS.some(([id]) => id === sub) ? sub : 'wallets';
     const offs = [], timers = [], stops = [];
     reload(); // pick up changes other modules made while this page was closed
     let alive = true;
     view.innerHTML = `<div class="trk" data-tab="${tab}">
       <div class="trk-top">
-        <nav class="subtabs trk-tabs" aria-label="Tracker views">${TABS.map(([id, label]) => `<a href="#/track/${id}" class="${id === tab ? 'on' : ''}"${id === tab ? ' aria-current="page"' : ''}>${label}${id === 'wallets' ? ` <b>${list.length}</b>` : ''}</a>`).join('')}</nav>
+        <nav class="subtabs trk-tabs" aria-label="Tracker views">${TABS.map(([id, label]) => `<a href="#/track/${SLUG[id] || id}" class="${id === tab ? 'on' : ''}"${id === tab ? ' aria-current="page"' : ''}>${label}${id === 'wallets' ? ` <b>${list.length}</b>` : ''}</a>`).join('')}</nav>
         <div class="trk-state" id="trk-state" role="status"></div>
       </div>
       <div class="trk-copybar" id="trk-copybar" hidden></div>
       <div class="trk-body" id="trk-body"></div>
     </div>`;
     const root = $('.trk', view), body = $('#trk-body', view);
+    // a KOL picture that does not load leaves its initial showing
+    root.addEventListener('error', (e) => { if (e.target instanceof HTMLImageElement && e.target.classList.contains('trk-pic')) e.target.remove(); }, true);
     const ctx = {
       root, body, alive: () => alive,
       on: (e, f) => offs.push(on(e, f)),
@@ -435,11 +467,10 @@ function mountWallets(ctx) {
   let group = LS.get('track.group', ''), noGroup = false, q = '', shown = 200, io = null, qt = 0;
   if (typeof group !== 'string' || (group && !list.some((w) => w.group === group))) group = '';
   body.innerHTML = `<div class="trk-w">
-    <aside class="trk-groups" id="tw-groups" aria-label="Groups"></aside>
     <section class="trk-wmain">
       <div class="trk-tools">
-        <label class="trk-search">${ICON.search}<input id="tw-q" placeholder="Search name, address or group" spellcheck="false" autocomplete="off"></label>
-        <button type="button" class="btn btn-accent" id="tw-add-btn">Add wallet</button>
+        <nav class="trk-groups" id="tw-groups" aria-label="Groups"></nav>
+        <label class="trk-search">${ICON.search}<input id="tw-q" placeholder="Search name, address or group" spellcheck="false" autocomplete="off" aria-label="Search wallets"></label>
         <button type="button" class="btn" id="tw-imp">Import</button>
         <div class="trk-menu" id="tw-exp">
           <button type="button" class="btn" id="tw-exp-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="tw-exp-m" title="Export the wallets shown">Export ${IC.chev}</button>
@@ -449,6 +480,7 @@ function mountWallets(ctx) {
             <button type="button" role="menuitem" data-exp="txt">Plain list<small>one address per line</small></button>
           </div>
         </div>
+        <button type="button" class="btn btn-accent" id="tw-add-btn">Add wallet</button>
       </div>
       <form class="trk-add" id="tw-add" hidden autocomplete="off">
         <input name="address" placeholder="Wallet address" spellcheck="false" class="mono" aria-label="Wallet address">
@@ -467,11 +499,10 @@ function mountWallets(ctx) {
   function drawGroups() {
     const counts = new Map(); let none = 0;
     for (const w of list) w.group ? counts.set(w.group, (counts.get(w.group) || 0) + 1) : none++;
-    $('#tw-groups', body).innerHTML = `<div class="tg-h">Groups</div>
-      <button type="button" data-g="" class="${!group && !noGroup ? 'on' : ''}"><span>All wallets</span><b>${list.length}</b></button>
-      ${groups().map((g) => `<button type="button" data-g="${esc(g)}" class="${group === g ? 'on' : ''}"><span>${esc(g)}</span><b>${counts.get(g)}</b></button>`).join('')}
-      ${none && counts.size ? `<button type="button" data-none class="${noGroup ? 'on' : ''}"><span>No group</span><b>${none}</b></button>` : ''}
-      ${counts.size ? '' : '<p class="tg-hint">Give a wallet a group when you add or edit it, and the group shows up here.</p>'}`;
+    $('#tw-groups', body).innerHTML = `<button type="button" data-g="" class="${!group && !noGroup ? 'on' : ''}"${!group && !noGroup ? ' aria-current="true"' : ''}><span>All wallets</span><b>${list.length}</b></button>
+      ${groups().map((g) => `<button type="button" data-g="${esc(g)}" class="${group === g ? 'on' : ''}"${group === g ? ' aria-current="true"' : ''}><span>${esc(g)}</span><b>${counts.get(g)}</b></button>`).join('')}
+      ${none && counts.size ? `<button type="button" data-none class="${noGroup ? 'on' : ''}"${noGroup ? ' aria-current="true"' : ''}><span>No group</span><b>${none}</b></button>` : ''}
+      ${counts.size ? '' : '<span class="tg-hint">Groups you give wallets show up here as tabs.</span>'}`;
     // no wallets: no sidebar and no toolbar, the empty state carries the actions; no groups: no phone group row
     wrap.classList.toggle('is-empty', !list.length); wrap.classList.toggle('no-grp', !counts.size);
     $('#tw-glist', body).innerHTML = groups().map((g) => `<option value="${esc(g)}">`).join('');
@@ -484,13 +515,13 @@ function mountWallets(ctx) {
   function rowHtml(w, cfg) {
     const c = cfg[w.address], a = esc(w.address);
     return `<tr data-addr="${a}">
-      <td class="tw-who"><span class="trk-emo">${w.emoji ? esc(w.emoji) : '<i></i>'}</span><span class="tw-id"><b>${esc(w.name || short(w.address))}</b><span class="mono dim">${esc(short(w.address, 5))}<button type="button" class="copy" data-copy="${a}" title="Copy address">${ICON.copy}</button><a href="https://solscan.io/account/${a}" target="_blank" rel="noopener" title="Open on Solscan" class="trk-ext">↗</a></span></span></td>
+      <td class="tw-who"><span class="trk-emo">${tile(w.emoji, w.address, w.name)}</span><span class="tw-id"><b${!w.name && kolName(w.address) ? ' title="Name from the public KOL list"' : ''}>${esc(w.name || kolName(w.address) || short(w.address))}</b><span class="tw-addr mono">${esc(short(w.address, 4))}<button type="button" class="copy" data-copy="${a}" title="Copy address">${ICON.copy}</button><a href="https://solscan.io/account/${a}" target="_blank" rel="noopener" title="Open on Solscan" class="trk-ext">↗</a></span></span></td>
       <td>${w.group ? `<span class="trk-grp">${esc(w.group)}</span>` : '<span class="dim">—</span>'}</td>
       <td class="num" data-bal>${balHtml(balCache.get(w.address))}</td>
       <td class="num" data-act>${actHtml(actCache.get(w.address))}</td>
-      ${['feed', 'alert', 'sound'].map((k) => `<td class="c" data-l="${k}"><button type="button" class="trk-sw${w[k] ? ' on' : ''}" data-tog="${k}" aria-pressed="${w[k]}" aria-label="${k}" title="${TOG[k]}"><i></i></button></td>`).join('')}
+      ${['feed', 'alert', 'sound'].map((k) => `<td class="c" data-l="${k}"><button type="button" class="trk-sw${w[k] ? ' on' : ''}" data-tog="${k}" aria-pressed="${w[k]}" aria-label="${k}" title="${TOG[k]}">${IC[k]}</button></td>`).join('')}
       <td class="c" data-l="copy"><button type="button" class="trk-cp${c?.on ? ' on' : ''}" data-copycfg title="${c?.on ? 'Copy trading is on: review or turn off' : 'Copy trading is off: set it up'}">${c?.on ? 'On' : 'Off'}</button></td>
-      <td class="tw-act"><button type="button" class="trk-lnk" data-edit>Edit</button><button type="button" class="trk-lnk down" data-del>Remove</button></td>
+      <td class="tw-act"><button type="button" class="trk-lnk" data-edit title="Edit name, emoji and group" aria-label="Edit">${IC.edit}</button><button type="button" class="trk-lnk down" data-del title="Stop tracking this wallet" aria-label="Remove">${IC.trash}</button></td>
     </tr>`;
   }
   function drawRows() {
@@ -498,8 +529,8 @@ function mountWallets(ctx) {
     if (!list.length) {
       scroll.innerHTML = emptyWithGhost('tw', {
         ic: 'radar', title: 'Follow wallets you trust', body: 'The list stays in this browser.',
-        steps: ['Add a wallet address, or import a list you already keep.', 'Get a notice on any page when one of them buys or sells.', 'Monitor shows the coins that two or more of them hold.'],
-        acts: '<button type="button" class="btn btn-accent" data-es="add">Add wallet</button><button type="button" class="btn" data-es="import">Import list</button><a class="btn btn-ghost" href="#/track/vision">Browse Vision →</a>',
+        steps: ['Add a wallet address, or import a list you already keep.', 'Get a notice on any page when one of them buys or sells.', 'Overlap shows the coins that two or more of them hold.'],
+        acts: '<button type="button" class="btn btn-accent" data-es="add">Add wallet</button><button type="button" class="btn" data-es="import">Import list</button><a class="btn btn-ghost" href="#/track/explore">Explore wallets →</a>',
       });
       return;
     }
@@ -529,6 +560,9 @@ function mountWallets(ctx) {
   }
   const draw = () => { drawGroups(); drawRows(); };
   draw();
+  // the group pills scroll (down past three rows on a desktop, sideways on phones): the edge that hides more fades out
+  const stopFade = edgeFade($('#tw-groups', body));
+  if (!kolBy) kolsReady().then(() => { if (ctx.alive() && list.some((w) => (!w.emoji || !w.name) && kolBy.has(w.address))) drawRows(); });
 
   $('#tw-groups', body).addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
@@ -596,7 +630,7 @@ function mountWallets(ctx) {
     if (e.target.closest('[data-edit]')) { openEdit(root, w, groups(), () => { if (ctx.alive()) draw(); }); return; }
     const del = e.target.closest('[data-del]');
     if (del) {
-      if (!del.dataset.sure) { del.dataset.sure = '1'; del.textContent = 'Confirm'; del.classList.add('sure'); setTimeout(() => { if (del.isConnected) { delete del.dataset.sure; del.textContent = 'Remove'; del.classList.remove('sure'); } }, 3000); return; }
+      if (!del.dataset.sure) { del.dataset.sure = '1'; del.textContent = 'Remove?'; del.classList.add('sure'); setTimeout(() => { if (del.isConnected) { delete del.dataset.sure; del.innerHTML = IC.trash; del.classList.remove('sure'); } }, 3000); return; }
       list = list.filter((x) => x.address !== w.address);
       save(); if (copyCfg()[w.address]) setCopy(w.address, null);
       draw();
@@ -604,7 +638,7 @@ function mountWallets(ctx) {
     }
   });
   ctx.on('tracked-copy', drawRows);
-  return () => { io?.disconnect(); clearTimeout(qt); document.removeEventListener('pointerdown', outside, true); };
+  return () => { io?.disconnect(); clearTimeout(qt); stopFade(); document.removeEventListener('pointerdown', outside, true); };
 }
 
 function openEdit(root, w, groups, done) {
@@ -894,8 +928,8 @@ function mountLive(ctx) {
     if (!list.length) {
       scroll.innerHTML = emptyWithGhost('tl', {
         ic: 'live', title: 'Watch their trades land', body: 'Every swap of the wallets you follow, the moment it confirms.',
-        steps: ['Track a wallet, or pick traders from Vision.', 'Keep Feed on for the wallets you want here.', 'Buys and sells show up with the market cap at fill.'],
-        acts: '<a class="btn btn-accent" href="#/track/wallets" data-es="add">Add wallet</a><a class="btn btn-ghost" href="#/track/vision">Browse Vision →</a>',
+        steps: ['Track a wallet, or pick traders from Explore.', 'Keep Feed on for the wallets you want here.', 'Buys and sells show up with the market cap at fill.'],
+        acts: '<a class="btn btn-accent" href="#/track/wallets" data-es="add">Add wallet</a><a class="btn btn-ghost" href="#/track/explore">Explore wallets →</a>',
       });
       return;
     }
@@ -911,6 +945,8 @@ function mountLive(ctx) {
       return;
     }
     const prev = shownSigs; shownSigs = new Set(rows.map((x) => x.sig));
+    // each SOL figure sits on a faint bar that starts at its left edge, sized against the biggest trade on screen
+    const top = Math.max(1e-9, ...rows.map((x) => (Number(x.sol) > 0 ? Number(x.sol) : 0)));
     scroll.innerHTML = `<table class="trk-t tl-t"><thead><tr>${HEAD.tl}</tr></thead><tbody>${rows.map((x) => {
       // the mint string comes from a decoded transaction: only a real address gets a link or a buy button
       const okMint = isMint(x.mint), m = String(x.mint ?? ''), side = x.side === 'sell' ? 'sell' : 'buy', at = Number(x.at) || 0;
@@ -918,13 +954,13 @@ function mountLive(ctx) {
       if (!t.symbol || !mc) waiting = true;
       return `<tr class="${side}${prev && !prev.has(x.sig) ? ' new' : ''}">
         <td class="mono"><span data-age="${at}">${ago(at)}</span></td>
-        <td class="tl-who"><span class="trk-emo sm">${e ? esc(e) : '<i></i>'}</span><span class="nm">${esc(w?.name || x.name || short(x.wallet))}</span></td>
+        <td class="tl-who"><span class="trk-emo sm">${tile(e, x.wallet, w?.name || x.name)}</span><span class="nm">${esc(w?.name || x.name || kolName(x.wallet) || short(x.wallet))}</span></td>
         <td><span class="trk-side ${side}">${side === 'buy' ? 'Buy' : 'Sell'}</span>${x.backfill ? '<span class="trk-bf" title="Loaded from history, not live">past</span>' : ''}</td>
         <td><span class="tl-tok"${okMint ? ` data-mint="${esc(m)}" title="Open ${esc(t.name || sym(t, m))}"` : ''}>${avatar({ ...t, mint: m, symbol: t.symbol || short(m, 2) }, 'xs')}<b>${esc(sym(t, m))}</b></span></td>
-        <td class="num ${side === 'buy' ? 'up' : 'down'}">${x.quote && x.quote !== 'SOL' ? `<span class="trk-bf" title="Paid in ${esc(x.quote)}; shown in SOL at the current price">${esc(x.quote)}</span> ≈` : ''}${solTxt(x.sol)}</td>
+        <td class="num tl-amt ${side === 'buy' ? 'up' : 'down'}" style="--w:${Math.min(1, (Number(x.sol) > 0 ? Number(x.sol) : 0) / top).toFixed(3)}">${x.quote && x.quote !== 'SOL' ? `<span class="trk-bf" title="Paid in ${esc(x.quote)}; shown in SOL at the current price">${esc(x.quote)}</span> ≈` : ''}${solTxt(x.sol)}</td>
         <td class="num">${mc ? usd(mc) : '<span class="dim">—</span>'}</td>
         <td class="c">${isSig(x.sig) ? `<a class="trk-ext" href="https://solscan.io/tx/${esc(x.sig)}" target="_blank" rel="noopener" title="Open the transaction on Solscan">↗</a>` : ''}</td>
-        <td class="c">${okMint && !SKIP.has(m) ? qbButton(m) : ''}</td>
+        <td class="c">${okMint && !SKIP.has(m) ? qbButton(m, undefined, 'l', true) : ''}</td>
       </tr>`;
     }).join('')}</tbody></table>`;
   }
@@ -944,6 +980,7 @@ function mountLive(ctx) {
     el.innerHTML = `<div class="tcl-h"><b>Copy log</b><span class="dim">${l.length ? `latest ${l.length}` : ''}</span></div>${l.length ? `<ul class="tcl">${l.map(row).join('')}</ul>` : '<span class="dim">Nothing copied yet.</span>'}`;
   }
   draw(); note(); copyPanel();
+  if (!kolBy) kolsReady().then(() => { if (ctx.alive() && list.length) draw(); });
   ctx.on('tracker-trade', ctx.throttle(draw, 300));
   const lateDraw = ctx.throttle(() => { if (waiting) draw(); }, 2000);
   ctx.on('tokens', lateDraw);
@@ -1029,7 +1066,7 @@ function mountMonitor(ctx) {
       scroll.innerHTML = emptyWithGhost('tm', {
         ic: 'overlap', title: 'See what your wallets agree on', body: 'The coins your tracked wallets hold in common, most shared first.',
         steps: [list.length ? 'Track at least one more wallet.' : 'Track two or more wallets.', 'Nought checks what each one holds, one wallet every 2 s.', 'Coins they share show up here with a quick buy.'],
-        acts: '<a class="btn btn-accent" href="#/track/wallets" data-es="add">Add wallet</a><a class="btn btn-ghost" href="#/track/vision">Browse Vision →</a>',
+        acts: '<a class="btn btn-accent" href="#/track/wallets" data-es="add">Add wallet</a><a class="btn btn-ghost" href="#/track/explore">Explore wallets →</a>',
       });
       return;
     }
@@ -1054,7 +1091,7 @@ function mountMonitor(ctx) {
         <td class="tm-who" title="${esc(names.join(', '))}">${hs.slice(0, 4).map((h) => `<span class="trk-chip">${h.w.emoji ? esc(h.w.emoji) + ' ' : ''}${esc(h.w.name || short(h.w.address, 3))}</span>`).join('')}${hs.length > 4 ? `<span class="dim">+${hs.length - 4}</span>` : ''}</td>
         <td class="num">${v != null ? usd(v) : '<span class="dim">—</span>'}</td>
         <td class="num">${mc ? usd(mc) : '<span class="dim">—</span>'}</td>
-        <td class="c">${qbButton(e.mint)}</td>
+        <td class="c">${qbButton(e.mint, undefined, 'l', true)}</td>
       </tr>`;
     }).join('')}</tbody></table>`;
   }
@@ -1101,22 +1138,6 @@ function mountMonitor(ctx) {
 }
 
 // ================= Vision =================
-const cleanKol = (k) => {
-  const a = String(k?.address || '').trim();
-  if (!isMint(a)) return null;
-  const x = String(k.x || '').trim().replace(/^@/, '');
-  return { address: a, name: str(k.name, 40) || short(a), x: /^[A-Za-z0-9_]{1,15}$/.test(x) ? x : '', tags: Array.isArray(k.tags) ? k.tags.map((t) => str(t, 20)).filter(Boolean).slice(0, 5) : [] };
-};
-async function loadKols() {
-  if (kolCache && Date.now() - kolCache.at < 300e3) return kolCache;
-  try {
-    const r = await fetch('data/kol-wallets.json', { cache: 'no-cache' });
-    if (!r.ok) throw new Error(String(r.status));
-    const j = await r.json(), seen = new Set();
-    kolCache = { at: Date.now(), list: (Array.isArray(j) ? j : []).map(cleanKol).filter((k) => k && !seen.has(k.address) && seen.add(k.address)).slice(0, 2000) };
-  } catch { kolCache = { at: Date.now(), list: [], err: true }; }
-  return kolCache;
-}
 // Top traders across a few trending coins, from each coin's latest trades (jx, up to 3 pages ≈ 90 trades per coin).
 // Realized PnL only counts sells matched against buys seen in the same window.
 async function scanDiscovered(progress) {
@@ -1163,43 +1184,52 @@ async function scanDiscovered(progress) {
 }
 function mountVision(ctx) {
   const { body } = ctx;
+  let kq = '', kqt = 0, kAll = false; // the list opens with its first KOL_FIRST cards; search looks through all of it
   body.innerHTML = `<div class="trk-vis">
     <section class="tv-sec">
-      <div class="tv-h"><h2>Community list</h2><span class="trk-note">Public wallets added by pull request, each with a source</span></div>
+      <div class="tv-h"><h2>Community list</h2><span class="tv-cnt mono" id="tv-kn"></span><span class="trk-note">Public wallets added by pull request, each with a source</span>
+        <label class="trk-search tv-q">${ICON.search}<input id="tv-kq" placeholder="Search name, @handle or address" spellcheck="false" autocomplete="off" aria-label="Search the community list"></label>
+      </div>
       <div id="tv-kols"><p class="tv-kol-empty"><span class="pulse-dot"></span><span>Loading the community list…</span></p></div>
     </section>
     <section class="tv-sec">
       <div class="tv-h"><h2>Discovered</h2><span class="trk-badge">computed this session</span>
         <div class="tv-ctl"><div class="trk-seg" id="tv-iv" role="group" aria-label="Trending window">${['5m', '1h', '6h'].map((v) => `<button type="button" data-iv="${v}" class="${disc.iv === v ? 'on' : ''}">${v}</button>`).join('')}</div>
         <div class="trk-seg" id="tv-n" role="group" aria-label="Coins to scan">${[4, 6, 10].map((v) => `<button type="button" data-n="${v}" class="${disc.n === v ? 'on' : ''}">${v} coins</button>`).join('')}</div>
-        </div><button type="button" class="btn tv-scan" id="tv-scan">Scan</button>
+        </div><button type="button" class="btn btn-accent tv-scan" id="tv-scan">Scan</button>
       </div>
       <p class="tv-p">Ranked in your browser from the latest ~90 trades of each of the top trending coins on Jupiter. Realized PnL only counts sells matched to buys in that window: a lead to check, not a track record.</p>
       <div id="tv-coins" class="tv-coins"></div>
       <div class="trk-scroll tv-scroll" id="tv-disc"></div>
     </section>
   </div>`;
-  const trackBtn = (a, label) => (index.has(a) ? '<button type="button" class="btn tv-tr" disabled>Tracked</button>' : `<button type="button" class="btn tv-tr tv-go" data-track="${esc(a)}"${label ? ` data-name="${esc(label)}"` : ''}>Track</button>`);
+  const trackBtn = (a, label) => (index.has(a) ? '<button type="button" class="btn sm tv-tr" disabled>Tracked</button>' : `<button type="button" class="btn sm tv-tr tv-go" data-track="${esc(a)}"${label ? ` data-name="${esc(label)}"` : ''}>Track</button>`);
+  // a round picture with the initial under it (shown when there is no picture, or it fails to load)
+  const pfp = (k, cls = '') => `<span class="tv-pfp ${cls}"><span class="ini" aria-hidden="true">${esc(ini(k.name))}</span>${kolPic(k) ? `<img class="trk-pic" src="${esc(kolPic(k))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}</span>`;
+  const xLink = (k) => (k.x ? `<a class="tv-x" href="https://x.com/${esc(k.x)}" target="_blank" rel="noopener nofollow" title="Open @${esc(k.x)} on X">${ICON.x}<span>@${esc(k.x)}</span></a>` : '');
   async function drawKols() {
     const k = await loadKols();
     if (!ctx.alive()) return;
-    const el = $('#tv-kols', body);
+    const el = $('#tv-kols', body), n = $('#tv-kn', body);
     if (k.err) { el.innerHTML = '<p class="tv-kol-empty"><span>The community list did not load. Try again later.</span></p>'; return; }
     if (!k.list.length) {
       el.innerHTML = '<p class="tv-kol-empty"><span>No entries yet: Nought never guesses who owns a wallet, so each one needs a public source.</span><a href="data/kol-wallets.json" target="_blank" rel="noopener">data/kol-wallets.json ↗</a></p>';
       return;
     }
-    const trades = logs.recentTrades();
-    el.innerHTML = `<div class="tv-grid">${k.list.map((x) => {
+    const q = kq.toLowerCase().replace(/^@/, ''), rows = q ? k.list.filter((x) => x.name.toLowerCase().includes(q) || x.x.toLowerCase().includes(q) || x.address.toLowerCase().startsWith(q)) : k.list;
+    n.textContent = q ? `${rows.length} of ${k.list.length}` : String(k.list.length);
+    if (!rows.length) { el.innerHTML = emptyHtml({ cls: 'sm', title: 'No one matches', body: `Nothing on the list matches “${esc(kq)}”.` }); return; }
+    const trades = logs.recentTrades(), shown = kAll || q ? rows : rows.slice(0, KOL_FIRST);
+    el.innerHTML = `<div class="tv-grid">${shown.map((x) => {
       const last = trades.find((t) => t.wallet === x.address);
       return `<div class="tv-card">
-        <div class="tv-c1"><b>${esc(x.name)}</b>${x.x ? `<a href="https://x.com/${esc(x.x)}" target="_blank" rel="noopener nofollow" class="dim">@${esc(x.x)}</a>` : ''}</div>
-        <div class="tv-c2 mono dim">${esc(short(x.address, 5))}<button type="button" class="copy" data-copy="${esc(x.address)}" title="Copy address">${ICON.copy}</button></div>
-        ${x.tags.length ? `<div class="tv-tags">${x.tags.map((t) => `<span class="trk-chip">${esc(t)}</span>`).join('')}</div>` : ''}
-        <div class="tv-c3">${last ? `<span class="trk-side ${last.side === 'sell' ? 'sell' : 'buy'}">${last.side === 'sell' ? 'Sell' : 'Buy'}</span> <span class="mono">${solTxt(last.sol)} SOL</span> <span class="dim" data-age="${Number(last.at) || 0}">${ago(Number(last.at) || 0)}</span>` : `<span class="dim">${index.has(x.address) ? 'No trade seen this session' : 'Track to see live trades'}</span>`}${trackBtn(x.address, x.name)}</div>
+        <div class="tv-c1">${pfp(x)}<span class="tv-id"><b title="${esc(x.name)}">${esc(x.name)}</b><span class="tv-sub">${xLink(x)}${x.tags.map((t) => `<span class="tv-tag">${esc(t)}</span>`).join('')}</span></span>${trackBtn(x.address, x.name)}</div>
+        <div class="tv-c2"><span class="tv-addr mono">${esc(short(x.address, 4))}<button type="button" class="copy" data-copy="${esc(x.address)}" title="Copy address">${ICON.copy}</button></span>
+          <span class="tv-last">${last ? `<span class="trk-side ${last.side === 'sell' ? 'sell' : 'buy'}">${last.side === 'sell' ? 'Sell' : 'Buy'}</span><span class="trk-solv">${SOLI}${solTxt(last.sol)}</span><span class="dim" data-age="${Number(last.at) || 0}">${ago(Number(last.at) || 0)}</span>` : `<span class="dim">${index.has(x.address) ? 'No trade seen this session' : 'Track to see live trades'}</span>`}</span></div>
       </div>`;
-    }).join('')}</div>`;
+    }).join('')}</div>${shown.length < rows.length ? `<div class="tv-more"><button type="button" class="btn sm" data-kall>Show all ${rows.length}</button></div>` : ''}`;
   }
+  $('#tv-kq', body).addEventListener('input', (e) => { clearTimeout(kqt); kqt = setTimeout(() => { kq = e.target.value.trim().slice(0, 60); drawKols(); }, 120); });
   function drawDisc(progress) {
     const el = $('#tv-disc', body), coins = $('#tv-coins', body);
     coins.innerHTML = disc.coins.length && !disc.busy ? `<span class="dim">Scanned</span>${disc.coins.filter(isMint).map((m) => { const t = tokens.get(m) || { mint: m }; return `<span class="tl-tok trk-chip" data-mint="${esc(m)}">${avatar({ ...t, symbol: t.symbol || short(m, 2) }, 'xs')}${esc(sym(t, m))}</span>`; }).join('')}<span class="dim"><span data-age="${disc.at}">${ago(disc.at)}</span> ago</span>` : '';
@@ -1218,16 +1248,20 @@ function mountVision(ctx) {
     if (!disc.at) { el.innerHTML = emptyHtml({ ic: 'scan', cls: 'sm', title: 'Find active traders', body: 'Scan ranks the top traders of the coins trending on Jupiter right now.', acts: '<button type="button" class="btn btn-accent" id="tv-again">Scan</button>' }); return; }
     if (!disc.rows.length) { el.innerHTML = emptyHtml({ ic: 'scan', cls: 'sm', title: 'No wallet traded enough in this window', body: 'Try a longer window or more coins, then scan again.' }); return; }
     const sh = (k, label, tip = '') => `<th class="r"><button type="button" class="tv-sort${disc.sort === k ? ' on' : ''}" data-sort="${k}"${tip ? ` title="${tip}"` : ''}>${label}${disc.sort === k ? ' ↓' : ''}</button></th>`;
-    el.innerHTML = `<table class="trk-t tv-t"><thead><tr><th class="r">#</th><th>Wallet</th>${sh('pnl', 'Realized PnL', 'Sells matched to buys in the scanned window')}${sh('vol', 'Volume')}${sh('trades', 'Trades')}<th class="r">Coins</th>${sh('win', 'Win rate', 'Share of coins closed in profit, among coins it both bought and sold in the window')}<th class="c"></th></tr></thead><tbody>${disc.rows.map((r, i) => `<tr>
+    el.innerHTML = `<table class="trk-t tv-t"><thead><tr><th class="r">#</th><th>Trader</th>${sh('pnl', 'Realized PnL', 'Sells matched to buys in the scanned window')}${sh('vol', 'Volume')}${sh('trades', 'Trades')}<th class="r">Coins</th>${sh('win', 'Win rate', 'Share of coins closed in profit, among coins it both bought and sold in the window')}<th class="c"></th></tr></thead><tbody>${disc.rows.map((r, i) => {
+      // a wallet on the public list shows its name and picture; any other shows its address
+      const k = kolBy?.get(r.address), a = esc(r.address);
+      return `<tr>
       <td class="num dim">${i + 1}</td>
-      <td class="mono tv-w"><a href="https://solscan.io/account/${esc(r.address)}" target="_blank" rel="noopener" title="Open on Solscan">${esc(short(r.address, 5))}</a><button type="button" class="copy" data-copy="${esc(r.address)}" title="Copy address">${ICON.copy}</button>${r.bot ? '<span class="trk-chip warn" title="Tagged as a bot by Jupiter">bot</span>' : ''}${r.trades >= 40 ? '<span class="trk-chip" title="Very active in a short window: may be automated">busy</span>' : ''}</td>
-      ${r.closed ? (([v, k]) => `<td class="num ${k}">${v} <span class="dim">SOL</span></td>`)(pnlTxt(r.pnl)) : '<td class="num dim">still holding</td>'}
-      <td class="num">${solTxt(r.vol)} <span class="dim">SOL</span></td>
+      <td class="tv-w"><span class="tv-wc">${k ? pfp(k, 'sm') : '<span class="tv-pfp sm anon"><i></i></span>'}<span class="tv-id">${k ? `<b title="${esc(k.name)}">${esc(k.name)}</b>` : ''}<span class="tv-addr mono"><a href="https://solscan.io/account/${a}" target="_blank" rel="noopener" title="Open on Solscan">${esc(short(r.address, 4))}</a><button type="button" class="copy" data-copy="${a}" title="Copy address">${ICON.copy}</button>${k ? xLink({ x: k.x }) : ''}${r.bot ? '<span class="trk-chip warn" title="Tagged as a bot by Jupiter">bot</span>' : ''}${r.trades >= 40 ? '<span class="trk-chip" title="Very active in a short window: may be automated">busy</span>' : ''}</span></span></span></td>
+      ${r.closed ? (([v, c]) => `<td class="num ${c}"><span class="trk-solv">${SOLI}${v}</span></td>`)(pnlTxt(r.pnl)) : '<td class="num dim">still holding</td>'}
+      <td class="num"><span class="trk-solv">${SOLI}${solTxt(r.vol)}</span></td>
       <td class="num">${r.trades}</td>
       <td class="num">${r.coins}</td>
-      <td class="num">${r.closed ? `${Math.round((r.wins / r.closed) * 100)}% <span class="dim">of ${r.closed}</span>` : '<span class="dim">—</span>'}</td>
+      <td class="num tv-win">${r.closed ? `${gauge(r.wins, r.closed)}<span>${Math.round((r.wins / r.closed) * 100)}%</span> <span class="dim">of ${r.closed}</span>` : '<span class="dim">—</span>'}</td>
       <td class="c">${trackBtn(r.address)}</td>
-    </tr>`).join('')}</tbody></table>`;
+    </tr>`;
+    }).join('')}</tbody></table>`;
   }
   // after a failed scan, a short pause (longer while Jupiter cools down after a rate limit) before the next try
   const retryLeft = () => Math.max(0, disc.at + 8e3 - Date.now(), Math.min(coolLeft('lite-api.jup.ag'), coolLeft('api.jup.ag')), coolLeft('datapi.jup.ag'));
@@ -1251,6 +1285,7 @@ function mountVision(ctx) {
     if (ctx.alive()) drawDisc();
   }
   drawKols(); drawDisc();
+  if (!kolBy) kolsReady().then(() => { if (ctx.alive() && $('#tv-disc table', body)) drawDisc(); });
   if (!disc.at && !disc.busy) scan();
   else if (disc.busy) ctx.every(() => { if (!disc.busy && !$('#tv-disc table', body) && disc.at) drawDisc(); }, 1000);
   ctx.on('tracker-trade', ctx.throttle(drawKols, 1000));
@@ -1261,14 +1296,16 @@ function mountVision(ctx) {
     const so = e.target.closest('[data-sort]');
     if (so) { disc.sort = DSORT[so.dataset.sort] ? so.dataset.sort : 'pnl'; disc.rows.sort(DSORT[disc.sort]); drawDisc(); return; }
     if (e.target.closest('#tv-scan, #tv-again')) { tryScan(); return; }
+    if (e.target.closest('[data-kall]')) { kAll = true; drawKols(); return; }
     const tr = e.target.closest('[data-track]');
     if (tr) {
       const a = tr.dataset.track;
       if (!isMint(a) || index.has(a)) return;
       if (list.length >= MAX_TRACKED) { toast(`You can track up to ${MAX_TRACKED} wallets.`, 'err'); return; }
-      addWallets([{ address: a, name: tr.dataset.name || '', group: tr.dataset.name ? 'Vision' : 'Discovered', feed: true }]);
-      tr.outerHTML = '<button type="button" class="btn tv-tr" disabled>Tracked</button>';
+      addWallets([{ address: a, name: tr.dataset.name || '', group: tr.dataset.name ? 'Explore' : 'Discovered', feed: true }]);
+      tr.outerHTML = '<button type="button" class="btn sm tv-tr" disabled>Tracked</button>';
       toast(`Tracking <span class="mono">${esc(short(a))}</span>. Rename it on the Wallets tab.`, 'ok');
     }
   });
+  return () => clearTimeout(kqt);
 }

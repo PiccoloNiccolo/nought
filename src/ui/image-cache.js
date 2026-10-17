@@ -73,9 +73,16 @@ function disk() {
 }
 export const imageCache = new ImageCache({ storage: disk() });
 
-// These public thumbnail hosts allow CORS. Other publishers retain native image loading.
-const CACHE_HOSTS = new Set(['pump.mypinata.cloud', 'images.pump.fun', 'cdn.dexscreener.com']);
-export const fastImageHost = host => CACHE_HOSTS.has(host);
+// These public thumbnail hosts allow CORS, so their bytes can be saved. Dexscreener's CDN is fast but sends no CORS
+// header: fetching it only fails and loads the picture twice, so it keeps native image loading.
+// pump.fun's CDN (d39w…cloudfront.net) is fast; its pictures are saved by pump-image.js, not here.
+const CACHE_HOSTS = new Set(['pump.mypinata.cloud']);
+const FAST_HOSTS = new Set([...CACHE_HOSTS, 'd39w9554j5ohjb.cloudfront.net', 'cdn.dexscreener.com']);
+export const fastImageHost = host => FAST_HOSTS.has(host);
+// gateway.pinata.cloud serves IPFS files pump.fun's gateway does not pin, but fetches them from the network first
+// (4-7 s, measured 2026-10-17). A shorter timeout means those pictures never load.
+export const SLOW_IPFS_HOST = 'gateway.pinata.cloud';
+export const imageTimeout = url => { try { return new URL(url).host === SLOW_IPFS_HOST ? 12000 : 0; } catch { return 0; } };
 export function loadImage(url, success, failure) {
   let stopped = false, probe, controller;
   const native = (src = url, data = null) => {
@@ -88,7 +95,7 @@ export function loadImage(url, success, failure) {
     };
     probe.onerror = () => { if (!stopped) failure(); }; probe.src = src;
   };
-  if (fastImageHost(new URL(url).hostname) && typeof FileReader !== 'undefined') {
+  if (CACHE_HOSTS.has(new URL(url).hostname) && typeof FileReader !== 'undefined') {
     controller = new AbortController();
     (async () => {
       const response = await fetch(url, { signal: controller.signal, credentials: 'omit', referrerPolicy: 'no-referrer' });

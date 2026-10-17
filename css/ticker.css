@@ -1,0 +1,31 @@
+/* The coin strip under the top bar (src/ui/ticker.js): 28px, source toggles at the left, a sideways-scrolling row of
+   chips, a close button at the right. It is a row of the body grid, so pages simply get 28px less; below 760px it is
+   not shown at all. */
+.ticker { position: relative; z-index: 29; display: flex; align-items: center; height: 28px; min-width: 0; border-bottom: 1px solid var(--line-soft); background: var(--bg); font: 500 12px/1 var(--sans); }
+.tk-src { flex: none; display: flex; align-items: center; gap: 2px; height: 100%; padding: 0 6px 0 10px; border-right: 1px solid var(--line-soft); }
+.tk-src button { display: grid; place-items: center; width: 24px; height: 20px; padding: 0; border: 0; border-radius: var(--radius); background: none; color: var(--dim); transition: color .12s, background-color .12s; }
+.tk-src button:hover { color: var(--fg); background: var(--hover); }
+.tk-src button[aria-pressed="true"] { color: var(--sel-fg); background: var(--sel-bg); }
+.tk-src [data-tip]:hover::after, .tk-src [data-tip]:focus-visible::after { left: 0; transform: none; }
+.tk-viewport { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; }
+.tk-viewport::-webkit-scrollbar { display: none; }
+.tk-viewport.more-r { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent); }
+.tk-viewport.more-l { -webkit-mask-image: linear-gradient(90deg, transparent, #000 40px); mask-image: linear-gradient(90deg, transparent, #000 40px); }
+.tk-viewport.more-l.more-r { -webkit-mask-image: linear-gradient(90deg, transparent, #000 40px, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(90deg, transparent, #000 40px, #000 calc(100% - 40px), transparent); }
+.tk-track { display: flex; align-items: center; gap: 2px; padding: 0 6px; white-space: nowrap; }
+.tk-i { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px 0 4px; border-radius: var(--radius); color: var(--fg); transition: background-color .12s; }
+.tk-i:hover, .tk-i:focus-visible { background: var(--hover); }
+.tk-i:focus-visible { outline-offset: -2px; }
+.tk-av { position: relative; flex: none; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 3px; overflow: hidden; background: var(--fill); color: var(--muted); font: 600 9px/1 var(--sans); }
+.tk-av img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.tk-av img:not([src]) { visibility: hidden; }
+.tk-i b { max-width: 10ch; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.tk-i .mc { color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.tk-i .ch { font-variant-numeric: tabular-nums; }
+.tk-i .ch:empty { display: none; }
+.tk-note { display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; color: var(--muted); }
+.tk-note svg { color: var(--dim); }
+.tk-sk { flex: none; width: 104px; height: 12px; margin: 0 6px; }
+.tk-x { flex: none; display: grid; place-items: center; width: 30px; height: 100%; padding: 0; border: 0; border-left: 1px solid var(--line-soft); background: none; color: var(--dim); }
+.tk-x:hover { color: var(--fg); background: var(--hover); }
+@media (max-width: 760px) { .ticker { display: none !important; } }

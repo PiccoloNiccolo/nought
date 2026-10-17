@@ -13,7 +13,7 @@ import { $, esc, safeUrl, isMint, short, usd, num, pct, ago, LS, on, toast, ICON
 import { register } from '../core/router.js';
 import { wallet, openWalletPicker } from '../core/wallet.js';
 import * as vault from '../core/vault.js';
-import { ju, jx, jt, ds, img } from '../core/jup.js';
+import { ju, jx, jt, ds, img, coolLeft } from '../core/jup.js';
 import { pricesFor, solUsd } from '../core/price.js';
 import { tokens as store } from '../core/store.js';
 import { tradeLog, feesSaved, trade, holding, quoteFor, quoteDetails, impactWarning, decimalsOf, SOL_MINT, DANGER_IMPACT } from '../core/trade.js';
@@ -21,8 +21,10 @@ import { quotedMin, maybeLanded } from '../ui/instant.js';
 import { avatar } from '../ui/card.js';
 import { togglePnlWidget, pnlWidgetOpen } from '../ui/pnlwidget.js';
 import { info as hlInfo } from '../core/hl.js';
+import { rpc, TOKEN_PROGRAM, TOKEN_2022 } from '../core/rpc.js';
 
-const TABS = [['spot', 'Spot'], ['activity', 'Activity'], ['calendar', 'Calendar'], ['perps', 'Perps']];
+// (the Hyperliquid Perps view below is no longer offered: #/portfolio/perps opens Spot)
+const TABS = [['spot', 'Spot'], ['activity', 'Activity'], ['calendar', 'Calendar']];
 // SOL and dollar stablecoins (USDC, USDT, USD1, PYUSD): counted in value, never treated as trades
 const BASE = new Set([SOL_MINT, 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', 'USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB', '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo']);
 const PRICE_CAP = 300;                                // coins valued per wallet (6 Jupiter price calls)
@@ -31,11 +33,11 @@ const PAGE_CLOSED = 15;                               // closed positions loaded
 const MAX_PAGES = 5;                                  // JX pages (30 fills) per coin; more = "partial history"
 const HOLD_EVERY = 60e3, PRICE_EVERY = 30e3, HELD_TTL = 300e3, CLOSED_TTL = 1800e3, DUST_USD = 1;
 const BUCKETS = [
-  { label: 'Above +500%', c: 'up3', t: (p) => p > 500 },
-  { label: '+200% to +500%', c: 'up2', t: (p) => p > 200 && p <= 500 },
-  { label: '0% to +200%', c: 'up1', t: (p) => p >= 0 && p <= 200 },
-  { label: '0% to −50%', c: 'dn1', t: (p) => p < 0 && p >= -50 },
-  { label: 'Below −50%', c: 'dn2', t: (p) => p < -50 },
+  { label: '>500%', c: 'up3', t: (p) => p > 500 },
+  { label: '200% ~ 500%', c: 'up2', t: (p) => p > 200 && p <= 500 },
+  { label: '0% ~ 200%', c: 'up1', t: (p) => p >= 0 && p <= 200 },
+  { label: '0% ~ −50%', c: 'dn1', t: (p) => p < 0 && p >= -50 },
+  { label: '< −50%', c: 'dn2', t: (p) => p < -50 },
 ];
 const RANGES = { '1d': 864e5, '7d': 7 * 864e5, '30d': 30 * 864e5, max: Infinity };
 const SIG = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
@@ -68,6 +70,15 @@ const fFee = (n) => (n > 0 && n < 0.001 ? Number(n.toPrecision(2)).toFixed(9).re
 const nTone = (n, c) => (n ? `<span class="${c}">${n}</span>` : '0');
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WALLET = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H17v3M4 7.5V17a2 2 0 0 0 2 2h13a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1H6.5A2.5 2.5 0 0 1 4 7.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="16" cy="13.5" r="1.3" fill="currentColor"/></svg>';
+// line icons for the calendar link, the Live PnL button and the empty tables
+const CAL = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>';
+const PULSE = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const BOX = '<svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path d="M4 8 12 4l8 4v8l-8 4-8-4V8Zm0 0 8 4 8-4m-8 4v8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M3 3l18 18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+const CLOCK = '<svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ACTIV = '<svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6h4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 3l18 18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+const RANGE_NAMES = { '1d': '1d', '7d': '7d', '30d': '30d', max: 'Max' };
+// a SOL amount with a small unit after it
+const solU = (v) => `${v}<small> SOL</small>`;
 
 // ---- token names and pictures: the store first, then our own cache (Jupiter search), kept in this browser ----
 const meta = new Map((LS.get('pf.meta', []) || []).filter((e) => Array.isArray(e) && isMint(e[0]) && e[1] && typeof e[1] === 'object'));
@@ -116,8 +127,35 @@ function book(addr) {
   if (!b) { b = { addr, at: 0, pxAt: 0, sol: 0, held: [], zero: [], px: new Map(), err: '', warn: '', busy: null, pending: 0, closedShown: PAGE_CLOSED, showDust: false }; books.set(addr, b); }
   return b;
 }
+// the wallet on screen goes first in Jupiter's queue, and is asked again as soon as a rate limit ends; when Jupiter
+// hasn't answered in 0.8 s the chain is asked too (token accounts of each token program, one after the other: the free
+// RPC that answers these refuses two at once, then SOL), and whichever answers first is shown
+async function holdingsFast(addr) {
+  const jupTry = async () => {
+    for (let i = 0; i < 5; i++) {
+      try { return await ju.holdings(addr, { prio: 'high' }); }
+      catch (e) { if (!(e?.cooling || e?.busy || e?.status === 429)) throw e; await new Promise((r) => setTimeout(r, Math.min(3000, Math.max(400, coolLeft('lite-api.jup.ag'))))); }
+    }
+    throw new Error('Jupiter is busy');
+  };
+  const jupP = jupTry(); jupP.catch(() => {});
+  const viaRpc = async () => {
+    const accts = (programId) => rpc('getTokenAccountsByOwner', [addr, { programId }, { encoding: 'jsonParsed', commitment: 'confirmed' }]);
+    const balP = rpc('getBalance', [addr, { commitment: 'confirmed' }]), a = await accts(TOKEN_PROGRAM), b2 = await accts(TOKEN_2022), bal = await balP;
+    const tokens = {};
+    for (const acc of [...(a?.value || []), ...(b2?.value || [])]) {
+      const info = acc.account?.data?.parsed?.info, ta = info?.tokenAmount; if (!isMint(info?.mint) || !ta) continue;
+      const cur = tokens[info.mint] || { raw: '0', ui: 0, dec: ta.decimals, frozen: false }, raw = BigInt(cur.raw) + BigInt(ta.amount);
+      tokens[info.mint] = { raw: raw.toString(), ui: Number(raw) / 10 ** ta.decimals, dec: ta.decimals, frozen: cur.frozen || info.state === 'frozen' };
+    }
+    return { sol: (bal?.value || 0) / 1e9, tokens };
+  };
+  let h = null;
+  h = await Promise.race([jupP.catch(() => null), new Promise((r) => setTimeout(() => r(null), 800))]);
+  return h || Promise.any([jupP, viaRpc()]).catch(() => { throw new Error('Could not read this wallet. Try again in a moment.'); });
+}
 async function loadHoldings(b) {
-  const h = await ju.holdings(b.addr);
+  const h = await holdingsFast(b.addr);
   const held = [], zero = [];
   for (const [mint, t] of Object.entries(h.tokens)) {
     if (t.raw !== '0') held.push({ mint, ui: t.ui, raw: t.raw, dec: t.dec, frozen: t.frozen });
@@ -129,7 +167,7 @@ async function loadPrices(b) {
   const mints = b.held.map((h) => h.mint).slice(0, PRICE_CAP);
   b.pxAt = Date.now();
   if (!mints.length) return;
-  for (const [m, p] of await pricesFor(mints)) if (p.priceUsd > 0) b.px.set(m, p.priceUsd);
+  for (const [m, p] of await pricesFor(mints, { prio: 'high' })) if (p.priceUsd > 0) b.px.set(m, p.priceUsd);
 }
 // held coins whose trade history we load: the most valuable ones, plus anything traded in Nought
 function heldTargets(b) {
@@ -245,7 +283,7 @@ function model(b) {
 
 // ---- the mounted page ----
 let ctx = null, paintT = 0;
-const TAB_STATE = { range: RANGES[LS.get('pf.range', '30d')] ? LS.get('pf.range', '30d') : '30d', af: 'all', aLimit: 200, cal: null };
+const TAB_STATE = { range: RANGES[LS.get('pf.range', '30d')] ? LS.get('pf.range', '30d') : '30d', af: 'all', aLimit: 200, cal: null, list: 'open' };
 function paint() { if (!ctx || paintT) return; paintT = setTimeout(() => { paintT = 0; if (ctx?.alive) renderBody(); }, 200); }
 
 const selKey = () => { const s = LS.get('pf.sel', 'active'); return s === 'active' || isMint(s) ? s : 'active'; };
@@ -280,9 +318,15 @@ register({
     const tab = TABS.some(([id]) => id === sub) ? sub : 'spot';
     view.innerHTML = `<div class="pf" data-tab="${tab}">
       <div class="pf-bar">
-        <nav class="subtabs pf-tabs" aria-label="Portfolio views">${TABS.map(([id, l]) => `<a href="#/portfolio/${id}" class="${id === tab ? 'on' : ''}"${id === tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>
-        <div class="pf-who" id="pf-who"></div>
-        <div class="pf-tools"><button class="btn btn-ghost icon" data-act="refresh" title="Refresh" aria-label="Refresh">${REFRESH}</button><button class="btn btn-ghost" data-act="widget" id="pf-wbtn" title="A floating box with this session's PnL for the active wallet">Live PnL</button></div>
+        <div class="pf-head">
+          <nav class="subtabs pf-tabs" aria-label="Portfolio views">${TABS.map(([id, l]) => `<a href="#/portfolio/${id}" class="${id === tab ? 'on' : ''}"${id === tab ? ' aria-current="page"' : ''}>${l}</a>`).join('')}</nav>
+          <div class="pf-find" id="pf-find"></div>
+        </div>
+        <div class="pf-sub">
+          <div class="pf-who" id="pf-who"></div>
+          <div class="pf-meta" id="pf-meta"></div>
+          <div class="pf-tools"><div class="pf-range" id="pf-range" role="group" aria-label="Range for realized PnL, trades and the activity map"${tab === 'spot' ? '' : ' hidden'}>${Object.keys(RANGES).map((r) => `<button type="button" data-range="${r}" class="${r === TAB_STATE.range ? 'on' : ''}" aria-pressed="${r === TAB_STATE.range}">${RANGE_NAMES[r]}</button>`).join('')}</div><button class="btn btn-ghost icon sm" data-act="refresh" title="Refresh" aria-label="Refresh">${REFRESH}</button><button class="btn btn-ghost sm" data-act="widget" id="pf-wbtn" title="A floating box with this session's PnL for the active wallet">${PULSE}Live PnL</button></div>
+        </div>
       </div>
       <div class="pf-main" id="pf-body"></div>
     </div>`;
@@ -323,78 +367,135 @@ function syncTools() {
   const rb = $('[data-act="refresh"]', ctx.view), wb = $('#pf-wbtn', ctx.view);
   if (rb) rb.disabled = ctx.tab === 'perps' ? !perps.addr : !ctx.addr;
   if (wb) { const open = pnlWidgetOpen(); wb.classList.toggle('on', open); wb.disabled = !wallet.owner && !open; wb.title = wb.disabled ? 'Connect a wallet to track its session PnL' : "A floating box with this session's PnL for the active wallet"; }
+  const rg = $('#pf-range', ctx.view);
+  if (rg) {
+    const b = ctx.addr ? books.get(ctx.addr) : null;
+    rg.hidden = ctx.tab !== 'spot' || !ctx.addr || !!(b?.err && !b.at);
+    for (const x of rg.querySelectorAll('[data-range]')) { const on = x.dataset.range === TAB_STATE.range; x.classList.toggle('on', on); x.setAttribute('aria-pressed', String(on)); }
+  }
 }
 function renderWho() {
-  const el = ctx && $('#pf-who', ctx.view); if (!el) return;
+  const el = ctx && $('#pf-who', ctx.view), find = ctx && $('#pf-find', ctx.view); if (!el || !find) return;
   syncTools();
   if (ctx.tab === 'perps') {
-    el.innerHTML = `<form class="pf-paste" data-form="evm"><input name="a" value="${esc(perps.addr)}" placeholder="Paste an EVM address (0x…)" spellcheck="false" autocomplete="off" aria-label="Hyperliquid account address"><button class="btn">View</button></form>`;
+    el.innerHTML = '';
+    find.innerHTML = `<form class="pf-paste" data-form="evm"><span class="pf-sic">${ICON.search}</span><input class="input pill" name="a" value="${esc(perps.addr)}" placeholder="Paste an EVM address (0x…)" spellcheck="false" autocomplete="off" aria-label="Hyperliquid account address"><button class="btn sm">View</button></form>`;
     return;
   }
   const s = selKey(), opts = [['active', wallet.owner ? `Active · ${wallet.name || 'Wallet'} · ${short(wallet.owner)}` : 'Active wallet · none']];
   for (const l of locals) opts.push([l.address, `Local · ${l.name || 'Wallet'} · ${short(l.address)}`]);
   for (const r of recents()) if (!opts.some(([v]) => v === r)) opts.push([r, `Address · ${short(r)}`]);
   if (s !== 'active' && !opts.some(([v]) => v === s)) opts.push([s, `Address · ${short(s)}`]);
-  el.innerHTML = `<select class="pf-select" data-sel aria-label="Wallet to view">${opts.map(([v, l]) => `<option value="${esc(v)}"${v === s ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
-    <form class="pf-paste" data-form="sol"><input name="a" placeholder="Paste any Solana address" spellcheck="false" autocomplete="off" aria-label="Solana address to view"><button class="btn">View</button></form>`;
+  el.innerHTML = `<select class="input pf-select" data-sel aria-label="Wallet to view">${opts.map(([v, l]) => `<option value="${esc(v)}"${v === s ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  find.innerHTML = `<form class="pf-paste" data-form="sol"><span class="pf-sic">${ICON.search}</span><input class="input pill" name="a" placeholder="Paste any Solana address" spellcheck="false" autocomplete="off" aria-label="Solana address to view"><button class="btn sm">View</button></form>`;
 }
 
 function renderBody() {
   const el = ctx && $('#pf-body', ctx.view); if (!el) return;
-  const keep = [...el.querySelectorAll('.pf-tw')].map((t) => t.scrollLeft);
+  const keep = [...el.querySelectorAll('.pf-tw')].map((t) => t.scrollLeft), feed = el.querySelector('.pf-feed')?.scrollTop || 0;
   el.innerHTML = ctx.tab === 'perps' ? perpsHtml() : solanaHtml();
   el.querySelectorAll('.pf-tw').forEach((t, i) => { if (keep[i]) t.scrollLeft = keep[i]; });
+  if (feed) { const f = el.querySelector('.pf-feed'); if (f) f.scrollTop = feed; }
+  const meta = $('#pf-meta', ctx.view);
+  if (meta) meta.innerHTML = ctx.tab !== 'perps' && ctx.addr ? addrLine(book(ctx.addr)) : '';
+  syncTools();
 }
 
 // a scrolling table, or (when there are no rows) the empty/loading state on its own so it stays readable on phones
 const tbl = (head, body, empty) => (body ? `<div class="pf-tw"><table class="pf-tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>` : empty);
-const emptyBox = (title, text, extra = '') => `<div class="empty-state pf-es"><h3>${title}</h3><p>${text}</p>${extra ? `<div class="es-acts">${extra}</div>` : ''}</div>`;
+const emptyBox = (title, text, extra = '', ic = '') => `<div class="empty-state pf-es">${ic ? `<span class="es-ic">${ic}</span>` : ''}<h3>${title}</h3>${text ? `<p>${text}</p>` : ''}${extra ? `<div class="es-acts">${extra}</div>` : ''}</div>`;
 const loadingRows = (n = 5) => `<div class="pf-skel" aria-label="Loading">${'<i></i>'.repeat(n)}</div>`;
 const STAT_NAMES = ['Total value', 'SOL available', 'Unrealized PnL', 'Realized PnL', 'Trades', 'Fees saved'];
-const skelStats = () => `<div class="pf-stats">${STAT_NAMES.map(() => '<div class="pf-stat"><span class="eyebrow">&nbsp;</span><b class="pf-ld"></b></div>').join('')}</div>`;
-// nothing to show yet: what to do, over a still preview of the stat tiles
-const noWallet = () => `<div class="empty-state pf-start"><span class="es-ic">${WALLET}</span><h3>No wallet picked</h3>
+const skelStats = () => `<div class="pf-stats">${STAT_NAMES.map(() => '<div class="pf-stat"><span class="pf-k">&nbsp;</span><b class="pf-ld"></b></div>').join('')}</div>`;
+// the Spot layout before there is data: the three cards with their labels over placeholder bars (still when there is
+// no wallet to load, shimmering while one loads)
+const SK = '<i class="skel"></i>';
+function skelTop(still) {
+  const kvs = (names) => names.map((k) => `<div class="pf-kv"><span>${k}</span><b>${SK}</b><em>${SK}</em></div>`).join('');
+  const rows = (names) => names.map((k) => `<div class="pf-prow"><span>${k}</span><b>${SK}</b></div>`).join('');
+  return `<div class="pf-top${still ? ' pf-ghost' : ''}" aria-hidden="true">
+    <section class="pf-box pf-bal"><header class="pf-bh"><h3>Balance</h3></header><div class="pf-bal-a"><div class="pf-kvs">${kvs(['Total value', 'Unrealized PnL'])}</div>${heatmap([], [], -Infinity)}</div><div class="pf-bal-b">${kvs(['SOL balance', 'Stablecoins', 'Fees saved'])}</div></section>
+    <section class="pf-box pf-chart"><header class="pf-bh"><h3>Realized PnL</h3></header><div class="pf-chart-v"><b>${SK}</b></div><div class="pf-pc"><div class="pf-plot"><i class="pf-gl z" style="top:50%"></i></div><div class="pf-xl"></div></div></section>
+    <section class="pf-box pf-perf"><header class="pf-bh"><h3>Performance</h3></header><div class="pf-rows">${rows([`${RANGE_NAMES[TAB_STATE.range]} Realized PnL`, `${RANGE_NAMES[TAB_STATE.range]} Trades`, 'Total PnL', 'Win rate (closed)'])}</div>
+      <div class="pf-bks">${BUCKETS.map((k) => `<div class="pf-bk"><i class="${k.c}"></i><span>${k.label}</span><b class="dim">—</b></div>`).join('')}</div><div class="pf-sw"><div class="pf-split"></div></div></section>
+  </div>`;
+}
+// nothing to show yet: the three cards as a still preview, and what to do in the positions box
+const noWallet = () => skelTop(true) + `<div class="pf-low pf-low-1 pf-cta"><section class="pf-lmain"><div class="empty-state pf-start"><span class="es-ic">${WALLET}</span><h3>No wallet picked</h3>
     <p>Connect a wallet, make a local one in this browser, or paste any Solana address to see its holdings and PnL. A pasted address is view only.</p>
-    <div class="es-acts"><button class="btn btn-accent" data-act="connect">Connect wallet</button>${vault.supported() ? '<button class="btn" data-act="newlocal">Create local wallet</button>' : ''}<button class="btn btn-ghost" data-act="paste">Paste an address</button></div></div>
-  <div class="pf-stats pf-ghost" aria-hidden="true">${STAT_NAMES.map((k) => `<div class="pf-stat"><span class="eyebrow">${k}</span><b><i class="skel"></i></b><em><i class="skel"></i></em></div>`).join('')}</div>`;
+    <div class="es-acts"><button class="btn btn-accent" data-act="connect">Connect wallet</button>${vault.supported() ? '<button class="btn" data-act="newlocal">Create local wallet</button>' : ''}<button class="btn btn-ghost" data-act="paste">Paste an address</button></div></div></section></div>`;
 
 function solanaHtml() {
   if (!ctx.addr) return noWallet();
   const b = book(ctx.addr);
-  if (b.err && !b.at) return addrLine(b) + emptyBox('Could not load this wallet', esc(b.err), '<button class="btn" data-act="retry">Try again</button>');
-  if (!b.at) return addrLine(b) + skelStats() + loadingRows(6);
+  if (b.err && !b.at) return `<div class="pf-low pf-low-1 pf-cta"><section class="pf-lmain">${emptyBox('Could not load this wallet', esc(b.err), '<button class="btn" data-act="retry">Try again</button>', WALLET)}</section></div>`;
+  if (!b.at) return ctx.tab === 'spot' ? skelTop(false) + `<div class="pf-low pf-low-1"><section class="pf-lmain">${loadingRows(6)}</section></div>` : skelStats() + loadingRows(6);
   const M = model(b);
   const warn = b.warn ? `<div class="pf-warn">${esc(b.warn)}</div>` : '';
-  if (ctx.tab === 'activity') return addrLine(b) + warn + activityHtml(b, M);
-  if (ctx.tab === 'calendar') return addrLine(b) + warn + calendarHtml(b, M);
-  return addrLine(b) + warn + spotHtml(b, M);
+  if (ctx.tab === 'activity') return warn + activityHtml(b, M);
+  if (ctx.tab === 'calendar') return warn + calendarHtml(b, M);
+  return warn + spotHtml(b, M);
 }
+// the wallet being shown, in the toolbar: view only or active, the address, Solscan, freshness
 function addrLine(b) {
   const ro = b.addr !== wallet.owner, badge = `<span class="pf-badge${ro ? '' : ' on'}" title="${ro ? 'Nought can show this wallet but cannot trade from it.' : 'The active wallet: you can sell from here.'}">${ro ? 'View only' : 'Active wallet'}</span>`;
-  return `<div class="pf-addr">${badge}<span class="mono">${esc(b.addr)}</span><button class="copy" data-copy="${esc(b.addr)}" title="Copy address">${ICON.copy}</button><a href="https://solscan.io/account/${esc(b.addr)}" target="_blank" rel="noopener">Solscan</a>${b.at ? `<span class="dim">updated <span data-age="${b.at}">${ago(b.at)}</span> ago</span>` : ''}${b.busy || b.pending ? '<span class="pf-spin" title="Loading"></span>' : ''}</div>`;
+  return `${badge}<span class="mono pf-adr" title="${esc(b.addr)}">${esc(b.addr)}</span><button class="copy" data-copy="${esc(b.addr)}" title="Copy address" aria-label="Copy address">${ICON.copy}</button><a href="https://solscan.io/account/${esc(b.addr)}" target="_blank" rel="noopener">Solscan ↗</a>${b.at ? `<span class="dim pf-upd">updated <span data-age="${b.at}">${ago(b.at)}</span> ago</span>` : ''}${b.busy || b.pending ? '<span class="pf-spin" title="Loading"></span>' : ''}`;
 }
-const stat = (k, v, sub = '', c = '', title = '') => `<div class="pf-stat"${title ? ` title="${esc(title)}"` : ''}><span class="eyebrow">${k}</span><b class="${c}">${v}</b>${sub ? `<em>${sub}</em>` : ''}</div>`;
+const stat = (k, v, sub = '', c = '', title = '') => `<div class="pf-stat"${title ? ` title="${esc(title)}"` : ''}><span class="pf-k">${k}</span><b class="${c}">${v}</b>${sub ? `<em>${sub}</em>` : ''}</div>`;
 const canSell = () => !!wallet.owner && ctx?.addr === wallet.owner;
 const tokCell = (m) => `<div class="pf-tok">${avatar(m, 'sm')}<div><b>${esc(symOf(m))}</b><span>${esc(m.name || short(m.mint))}</span></div></div>`;
 
-// ---- Spot ----
+// ---- Spot: Balance, Realized PnL and Performance side by side in one box, then positions / history with the latest
+// fills beside them. The range (1d 7d 30d Max) drives the chart, the ranged Performance lines and the activity map. ----
+const kv = (k, v, sub = '', c = '', title = '') => `<div class="pf-kv"${title ? ` title="${esc(title)}"` : ''}><span>${k}</span><b class="${c}">${v}</b>${sub ? `<em>${sub}</em>` : ''}</div>`;
 function spotHtml(b, M) {
-  const fs = feesSaved(b.addr), su = M.su;
-  const stats = `<div class="pf-stats">
-    ${stat('Total value', usd(M.totalUsd, 2), M.totalSol != null ? `${fSol(M.totalSol)} SOL` : '', '', `SOL plus ${M.priced} priced coins`)}
-    ${stat('SOL available', `${fSol(b.sol)} SOL`, usd(b.sol * su, 2))}
-    ${stat('Unrealized PnL', `${fSol(M.unrealSol, true)} SOL`, `${fUsd(M.unrealUsd, true)} · ${M.openKnown} open`, tone(M.unrealSol), 'Value of what you hold minus its average cost, for coins with a known cost')}
-    ${stat('Realized PnL', `${fSol(M.realSol, true)} SOL`, `${fUsd(M.realUsd, true)} · ${M.coins} coin${M.coins === 1 ? '' : 's'}`, tone(M.realSol), 'Booked on each sell against your average entry')}
-    ${stat('Trades', `${nTone(M.buys, 'up')} / ${nTone(M.sells, 'down')}`, M.closed.length ? `${Math.round((M.wins / M.closed.length) * 100)}% of closed in profit` : 'buys / sells')}
-    ${stat('Fees saved', `${fSol(fs.sol)} SOL`, `${usd(fs.usd, 2)} on ${fs.trades} Nought trade${fs.trades === 1 ? '' : 's'}`, fs.sol > 0 ? 'up' : '', 'What a typical 1% terminal fee would have cost on trades you made in Nought in this browser. Nought charges 0%.')}
-  </div>`;
+  const from = pnlBuckets(M.events, TAB_STATE.range).from;
+  return `<div class="pf-top">${balanceCard(b, M, from)}${chartCard(M)}${perfCard(M, from)}</div><div class="pf-low${canSell() ? ' pf-sellable' : ''}">${lowerHtml(b, M)}${feedHtml(b, M)}</div>`;
+}
+
+function balanceCard(b, M, from) {
+  const fs = feesSaved(b.addr), stable = M.held.reduce((s, r) => s + (r.base && r.mint !== SOL_MINT ? r.valueUsd || 0 : 0), 0);
+  return `<section class="pf-box pf-bal"><header class="pf-bh"><h3>Balance</h3><span class="pf-mut">${M.priced} of ${M.held.length} coin${M.held.length === 1 ? '' : 's'} priced</span></header>
+    <div class="pf-bal-a"><div class="pf-kvs">
+      ${kv('Total value', usd(M.totalUsd, 2), M.totalSol != null ? `${fSol(M.totalSol)} SOL` : '', '', `SOL plus ${M.priced} priced coins`)}
+      ${kv('Unrealized PnL', solU(fSol(M.unrealSol, true)), `${fUsd(M.unrealUsd, true)} · ${M.openKnown} open`, tone(M.unrealSol), 'Value of what you hold minus its average cost, for coins with a known cost')}
+    </div>${heatmap(M.fills, M.events, from)}</div>
+    <div class="pf-bal-b">
+      ${kv('SOL balance', solU(fSol(b.sol)), usd(b.sol * M.su, 2))}
+      ${kv('Stablecoins', usd(stable, 2), '', '', 'USDC, USDT, USD1 and PYUSD in this wallet')}
+      ${kv('Fees saved', solU(fSol(fs.sol)), `${usd(fs.usd, 2)} on ${fs.trades} Nought trade${fs.trades === 1 ? '' : 's'}`, fs.sol > 0 ? 'up' : '', 'What a typical 1% terminal fee would have cost on trades you made in Nought in this browser. Nought charges 0%.')}
+    </div></section>`;
+}
+// when the wallet traded, by weekday and hour (local time) over the range: a cell with sells is green or red by their
+// realized PnL (stronger for bigger amounts), a cell with buys only gets a faint tint
+function heatmap(fills, events, from) {
+  const c = Array.from({ length: 168 }, () => ({ n: 0, s: 0, sol: 0 })), at = (t) => { const d = new Date(t); return ((d.getDay() + 6) % 7) * 24 + d.getHours(); };
+  for (const f of fills) if (f.at >= from) c[at(f.at)].n++;
+  for (const e of events) if (e.at >= from) { const x = c[at(e.at)]; x.s++; x.sol += e.sol; }
+  const peak = Math.max(1e-9, ...c.map((x) => Math.abs(x.sol)));
+  const cell = (x, i) => (!x.n && !x.s ? '<i></i>'
+    : `<i class="${x.s ? tone(x.sol) || 'flat' : 'act'}" style="--k:${x.s ? (0.35 + (0.65 * Math.abs(x.sol)) / peak).toFixed(2) : 0}" title="${esc(`${DOW[Math.floor(i / 24)]} ${String(i % 24).padStart(2, '0')}:00 · ${x.n} trade${x.n === 1 ? '' : 's'}${x.s ? ` · ${fSol(x.sol, true)} SOL realized` : ''}`)}"></i>`);
+  return `<div class="pf-hm" role="img" aria-label="Trades by weekday and hour of day"><span></span><div class="pf-hm-x"><span>12a</span><span>6a</span><span>12p</span><span>6p</span></div>${DOW.map((d, r) => `<span class="pf-hm-d">${d[0]}</span>${c.slice(r * 24, r * 24 + 24).map((x, h) => cell(x, r * 24 + h)).join('')}`).join('')}</div>`;
+}
+
+const chartCard = (M) => `<section class="pf-box pf-chart"><header class="pf-bh"><h3>Realized PnL</h3><a class="btn btn-ghost icon sm" href="#/portfolio/calendar" data-tip="Calendar" data-tip-pos="bottom" aria-label="Realized PnL calendar">${CAL}</a></header>${pnlChart(M.events, TAB_STATE.range)}</section>`;
+
+function perfCard(M, from) {
+  const R = RANGE_NAMES[TAB_STATE.range], ev = M.events.filter((e) => e.at >= from), fl = M.fills.filter((f) => f.at >= from);
+  const rs = ev.reduce((s, e) => s + e.sol, 0), ru = ev.reduce((s, e) => s + e.usd, 0), nb = fl.filter((f) => f.side === 'buy').length;
   const totalPnl = M.perf.reduce((s, r) => s + (r.pnlSol || 0), 0), totalPnlUsd = M.perf.reduce((s, r) => s + (r.pnlUsd || 0), 0);
-  const counts = BUCKETS.map((k) => M.perf.filter((r) => k.t(r.pnlPct)).length), max = Math.max(1, ...counts);
-  const perf = `<section class="pf-card pf-perf"><div class="pf-card-h"><h3>Performance</h3><span class="pf-mut">${M.perf.length} coin${M.perf.length === 1 ? '' : 's'} with a known cost</span></div>
-    <div class="pf-total"><span class="eyebrow">Total PnL</span><b class="${tone(totalPnl)}">${fSol(totalPnl, true)} SOL</b><em>${fUsd(totalPnlUsd, true)}</em></div>
-    <div class="pf-bks">${BUCKETS.map((k, i) => `<div class="pf-bk"><span>${k.label}</span><i>${counts[i] ? `<s class="${k.c}" style="width:${((counts[i] / max) * 100).toFixed(1)}%"></s>` : ''}</i><b class="${counts[i] ? '' : 'dim'}">${counts[i]}</b></div>`).join('')}</div></section>`;
-  const chart = `<section class="pf-card pf-chart"><div class="pf-card-h"><h3>Realized PnL</h3><div class="pf-seg">${Object.keys(RANGES).map((r) => `<button data-range="${r}" class="${r === TAB_STATE.range ? 'on' : ''}">${r === 'max' ? 'Max' : r.toUpperCase()}</button>`).join('')}</div></div>${pnlChart(M.events, TAB_STATE.range)}</section>`;
-  return stats + `<div class="pf-duo">${perf}${chart}</div>` + positionsHtml(b, M) + historyHtml(b, M);
+  const counts = BUCKETS.map((k) => M.perf.filter((r) => k.t(r.pnlPct)).length), all = M.perf.length, win = counts[0] + counts[1] + counts[2];
+  const row = (k, v, c = '', title = '') => `<div class="pf-prow"${title ? ` title="${esc(title)}"` : ''}><span>${k}</span><b class="${c}">${v}</b></div>`;
+  return `<section class="pf-box pf-perf"><header class="pf-bh"><h3>Performance</h3><span class="pf-mut">${all} coin${all === 1 ? '' : 's'} with a known cost</span></header>
+    <div class="pf-rows">
+      ${row(`${R} Realized PnL`, `${solU(fSol(rs, true))}<em>${fUsd(ru, true)}</em>`, tone(rs), 'Booked on each sell against your average entry')}
+      ${row(`${R} Trades`, `${fl.length}<em>${nTone(nb, 'up')}/${nTone(fl.length - nb, 'down')}</em>`, '', 'Buys / sells')}
+      ${row('Total PnL', `${solU(fSol(totalPnl, true))}<em>${fUsd(totalPnlUsd, true)}</em>`, tone(totalPnl), 'All time: realized plus unrealized, for coins with a known cost')}
+      ${row('Win rate (closed)', M.closed.length ? `${Math.round((M.wins / M.closed.length) * 100)}%<em>${M.wins}/${M.closed.length}</em>` : '<span class="dim">N/A</span>', '', 'Closed coins sold at a profit, all time')}
+    </div>
+    <div class="pf-bks" title="Return per coin, all time">${BUCKETS.map((k, i) => `<div class="pf-bk"><i class="${k.c}"></i><span>${k.label}</span><b class="${counts[i] ? '' : 'dim'}">${counts[i]}</b></div>`).join('')}</div>
+    <div class="pf-sw" title="${all ? `Every coin with a known cost, open or closed, all time: ${win} at 0% or better, ${all - win} at a loss` : 'No coins with a known cost yet'}"><div class="pf-swl"><span>All coins</span><span><b class="${win ? 'up' : ''}">${win}</b> up · <b class="${all - win ? 'down' : ''}">${all - win}</b> down</span></div>
+      <div class="pf-split">${all ? `${win ? `<i class="up" style="flex:${win}"></i>` : ''}${all - win ? `<i class="down" style="flex:${all - win}"></i>` : ''}` : ''}</div></div></section>`;
 }
 
 // Realized PnL per day over the range (per hour on 1D, per week when Max spans months): green and red bars from the
@@ -421,12 +522,18 @@ function pnlBuckets(events, range) {
 function pnlChart(events, range) {
   const B = pnlBuckets(events, range), ev = events.filter((e) => e.at >= B.from);
   const span = range === 'max' ? 'in all' : 'in the last ' + { '1d': 'day', '7d': '7 days', '30d': '30 days' }[range];
-  if (!ev.length) return `<div class="pf-chart-empty">No sells ${range === 'max' ? 'found yet' : 'in this range'}. Realized PnL shows here as you close trades.</div>`;
+  const X = (i) => (((i + 0.5) / B.n) * 100).toFixed(2);
+  const picks = B.n <= 7 ? Array.from({ length: B.n }, (_, i) => i) : [...new Set([0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(f * (B.n - 1))))];
+  // up to 7 day labels (every other one on a phone), or 5 spread ones with the outer two kept inside the edges
+  const xl = picks.map((i, k) => `<span class="${B.n > 7 ? (k === 0 ? 'l' : k === picks.length - 1 ? 'r' : '') : k % 2 ? 'o' : ''}" style="left:${X(i)}%">${B.label(B.at(i))}</span>`).join('');
+  // no sells: a flat zero line over the range, like an idle chart
+  if (!ev.length) return `<div class="pf-chart-v"><b>${solU('0')}</b><span>No sells ${range === 'max' ? 'found yet' : span}</span></div>
+    <div class="pf-pc pf-flat"><div class="pf-plot"><i class="pf-gl z" style="top:50%"></i><span class="pf-yl" style="top:50%">0</span><p>Realized PnL shows here as you close trades.</p></div><div class="pf-xl">${xl}</div></div>`;
   const v = Array.from({ length: B.n }, (_, i) => ({ i, sol: 0, usd: 0, k: 0 }));
   for (const e of ev) { const x = v[B.idx(e.at)]; if (x) { x.sol += e.sol; x.usd += e.usd; x.k++; } }
   const hit = v.filter((x) => x.k), run = ev.reduce((t, e) => t + e.sol, 0), c = tone(run);
   const hi = Math.max(0, ...hit.map((x) => x.sol)), lo = Math.min(0, ...hit.map((x) => x.sol)), sp = hi - lo || 1;
-  const Yp = (y) => (((hi - y) / sp) * 100).toFixed(2), X = (i) => (((i + 0.5) / B.n) * 100).toFixed(2), y0 = Yp(0);
+  const Yp = (y) => (((hi - y) / sp) * 100).toFixed(2), y0 = Yp(0);
   const tip = (x) => esc(`${B.label(B.at(x.i))}: ${fSol(x.sol, true)} SOL · ${fUsd(x.usd, true)} · ${x.k} sell${x.k === 1 ? '' : 's'}`);
   // axis: 0, plus the largest gain and loss when they sit clear of the zero line
   let marks = `<i class="pf-gl z" style="top:${y0}%"></i><span class="pf-yl" style="top:${y0}%">0</span>`;
@@ -437,18 +544,28 @@ function pnlChart(events, range) {
     : hit.map((x) => (x.sol >= 0
       ? `<b class="pf-pb up" style="left:${X(x.i)}%;bottom:${(100 - y0).toFixed(2)}%;height:${(y0 - Yp(x.sol)).toFixed(2)}%" title="${tip(x)}"></b>`
       : `<b class="pf-pb down" style="left:${X(x.i)}%;top:${y0}%;height:${(Yp(x.sol) - y0).toFixed(2)}%" title="${tip(x)}"></b>`)).join('');
-  const picks = B.n <= 7 ? v.map((x) => x.i) : [...new Set([0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(f * (B.n - 1))))];
-  // up to 7 day labels (every other one on a phone), or 5 spread ones with the outer two kept inside the edges
-  const xl = picks.map((i, k) => `<span class="${B.n > 7 ? (k === 0 ? 'l' : k === picks.length - 1 ? 'r' : '') : k % 2 ? 'o' : ''}" style="left:${X(i)}%">${B.label(B.at(i))}</span>`).join('');
-  return `<div class="pf-chart-v"><b class="${c}">${fSol(run, true)} SOL</b><span>${fUsd(ev.reduce((t, e) => t + e.usd, 0), true)} · ${ev.length} sell${ev.length === 1 ? '' : 's'} ${span}</span></div>
+  return `<div class="pf-chart-v"><b class="${c}">${solU(fSol(run, true))}</b><span>${fUsd(ev.reduce((t, e) => t + e.usd, 0), true)} · ${ev.length} sell${ev.length === 1 ? '' : 's'} ${span}</span></div>
     <div class="pf-pc" style="--n:${B.n}" role="img" aria-label="Realized PnL per ${range === '1d' ? 'hour' : 'day'}, ${esc(fSol(run, true))} SOL ${span}"><div class="pf-plot">${marks}${plot}</div><div class="pf-xl">${xl}</div></div>`;
 }
 
-function positionsHtml(b, M) {
-  const sell = canSell();
+// positions and history share one box under tabs; the open one is kept for this visit
+function lowerHtml(b, M) {
+  const open = TAB_STATE.list !== 'closed', sell = canSell(), left = M.cands.length - M.shown.length;
   const big = M.held.filter((r) => r.base || (r.valueUsd ?? 0) >= DUST_USD || r.p), small = M.held.length - big.length;
+  const tabs = [['open', 'Active positions', big.length], ['closed', 'History', M.closed.length]].map(([v, l, n]) => { const on = (v === 'open') === open; return `<button type="button" role="tab" data-list="${v}" class="${on ? 'on' : ''}" aria-selected="${on}">${l} <b>${n}</b></button>`; }).join('');
+  const status = open
+    ? (b.pending ? `Loading cost basis · ${b.pending} left` : M.held.length > PRICE_CAP ? `Valued the first ${PRICE_CAP} of ${M.held.length} coins` : `${M.priced} of ${M.held.length} priced`)
+    : `Checked ${M.shown.length} of ${M.cands.length} closed coin${M.cands.length === 1 ? '' : 's'}${M.noTrades ? ` · ${M.noTrades} had no trades (airdrops or transfers)` : ''}`;
+  const foot = open
+    ? (small ? `<button class="pf-more" data-act="dust">${b.showDust ? 'Hide' : 'Show'} ${small} small or unpriced balance${small === 1 ? '' : 's'}</button>` : '')
+    : (left > 0 ? `<button class="pf-more" data-act="more"${b.pending ? ' disabled' : ''}>Check ${Math.min(PAGE_CLOSED, left)} more (${left} left)</button>` : '');
+  return `<section class="pf-lmain"><div class="pf-lh"><nav class="subtabs pf-ltabs" role="tablist" aria-label="Positions">${tabs}</nav><span class="pf-mut pf-status">${status}</span>${sell && open ? '<span class="pf-fee">Nought fee 0% on sells</span>' : ''}</div>
+    ${open ? positionsTable(b, M, big, sell) : historyTable(M)}${foot}
+    <p class="pf-fine">Cost basis comes from Jupiter's trade index plus the Nought trades logged in this browser, at your average entry. Nought can only find coins whose token accounts still exist in this wallet or that you traded in Nought here: coins whose accounts were closed elsewhere are missing. Tokens received by transfer have no cost, so their PnL is marked "basis?".</p></section>`;
+}
+
+function positionsTable(b, M, big, sell) {
   const rows = b.showDust ? M.held.slice(0, 400) : big;
-  const status = b.pending ? `Loading cost basis · ${b.pending} left` : M.held.length > PRICE_CAP ? `Valued the first ${PRICE_CAP} of ${M.held.length} coins` : `${M.priced} of ${M.held.length} priced`;
   const body = rows.length ? rows.map((r) => {
     const p = r.p, m = r.m, entryMc = p?.avgEntryUsd && m.supply ? p.avgEntryUsd * m.supply : null;
     const wait = r.waiting ? '<span class="pf-ld"></span>' : '—';
@@ -457,36 +574,41 @@ function positionsHtml(b, M) {
     const share = p && p.bought > 0 && r.pnlSol != null ? `<button class="pf-ic" data-share="${esc(r.mint)}" title="Make a PnL card" aria-label="Make a PnL card">${SHARE}</button>` : '';
     return `<tr data-mint="${esc(r.mint)}">
       <td>${tokCell(m)}</td>
-      <td class="r">${fTok(r.ui)}${r.frozen ? ' <span class="pf-flag down" title="Frozen by the token">frozen</span>' : ''}</td>
-      <td class="r">${usd(r.valueUsd, 2)}<em>${r.valueSol != null ? fSol(r.valueSol) + ' SOL' : 'no price'}</em></td>
+      <td class="r">${p ? solU(fSol(p.invested)) : r.base ? '' : wait}${p ? `<em>${p.buys} buy${p.buys === 1 ? '' : 's'}</em>` : ''}</td>
+      <td class="r">${p ? solU(fSol(p.sold)) : ''}${p?.sells ? `<em class="${tone(p.realized)}">${fSol(p.realized, true)} real.</em>` : ''}</td>
+      <td class="r">${usd(r.valueUsd, 2)}<em>${fTok(r.ui)} · ${r.valueSol != null ? fSol(r.valueSol) + ' SOL' : 'no price'}${r.frozen ? ' <span class="pf-flag down" title="Frozen by the token">frozen</span>' : ''}</em></td>
+      <td class="r ${tone(r.unrealSol)}">${r.unrealSol != null ? solU(fSol(r.unrealSol, true)) : ''}${r.unrealUsd != null ? `<em>${fUsd(r.unrealUsd, true)}</em>` : ''}</td>
+      <td class="r ${tone(r.pnlSol)}">${r.pnlSol != null ? solU(fSol(r.pnlSol, true)) : ''}${r.pnlPct != null || flags ? `<em>${flags}${r.pnlPct != null ? pct(r.pnlPct) : ''}</em>` : ''}</td>
       <td class="r">${r.base ? '' : entryMc ? usd(entryMc) : p && !p.bought ? '<span class="dim" title="No buys found: received by transfer or airdrop">no buys</span>' : wait}${p?.avgEntryUsd ? `<em>$${px(p.avgEntryUsd)}</em>` : ''}</td>
-      <td class="r">${p ? fSol(p.invested) : r.base ? '' : wait}${p ? `<em>${p.buys} buy${p.buys === 1 ? '' : 's'}</em>` : ''}</td>
-      <td class="r">${p ? fSol(p.sold) : ''}${p?.sells ? `<em class="${tone(p.realized)}">${fSol(p.realized, true)} real.</em>` : ''}</td>
-      <td class="r ${tone(r.unrealSol)}">${r.unrealSol != null ? fSol(r.unrealSol, true) : ''}${r.unrealUsd != null ? `<em>${fUsd(r.unrealUsd, true)}</em>` : ''}</td>
-      <td class="r ${tone(r.pnlSol)}">${r.pnlSol != null ? fSol(r.pnlSol, true) : ''}${r.pnlPct != null ? `<em>${pct(r.pnlPct)}</em>` : ''}${flags}</td>
+      <td class="r">${p?.first ? `${p.partial ? `<span class="dim" title="At least this long ago: ${p.err ? 'the trade history did not fully load' : `only the latest ${MAX_PAGES * 30} trades were read`}">&gt;</span>` : ''}<span data-age="${p.first}">${ago(p.first)}</span>` : ''}</td>
       <td class="pf-act">${sellBtns}${share}</td></tr>`;
   }).join('') : '';
-  return `<section class="pf-card"><div class="pf-card-h"><h3>Active positions <span class="pf-n">${big.length}</span></h3><span class="pf-mut">${status}</span>${sell ? '<span class="pf-fee">Nought fee 0% on sells</span>' : ''}</div>
-    ${tbl(`<th>Token</th><th class="r">Holding</th><th class="r">Value</th><th class="r">Avg entry MC</th><th class="r">Bought (SOL)</th><th class="r">Sold (SOL)</th><th class="r">Unrealized</th><th class="r">Total PnL</th><th class="r">${sell ? 'Sell' : ''}</th>`, body, emptyBox('No open positions', 'This wallet holds no tokens right now.'))}
-    ${small ? `<button class="pf-more" data-act="dust">${b.showDust ? 'Hide' : 'Show'} ${small} small or unpriced balance${small === 1 ? '' : 's'}</button>` : ''}</section>`;
+  return tbl(`<th>Token</th><th class="r">Bought</th><th class="r">Sold</th><th class="r" aria-sort="descending" title="Largest value first">Remaining</th><th class="r">Unrealized</th><th class="r">PnL</th><th class="r">Avg entry MC</th><th class="r">Opened</th><th class="r">${sell ? 'Sell' : 'Action'}</th>`, body, emptyBox('No open positions', 'This wallet holds no tokens right now.', '', BOX));
 }
 
-function historyHtml(b, M) {
-  const left = M.cands.length - M.shown.length;
+function historyTable(M) {
   const body = M.closed.length ? M.closed.map((r) => `<tr data-mint="${esc(r.mint)}">
       <td>${tokCell(r.m)}</td>
-      <td class="r">${fSol(r.p.invested)}</td><td class="r">${fSol(r.p.sold)}</td>
-      <td class="r ${tone(r.pnlSol)}">${fSol(r.pnlSol, true)}<em>${fUsd(r.pnlUsd, true)}</em></td>
+      <td class="r">${solU(fSol(r.p.invested))}</td><td class="r">${solU(fSol(r.p.sold))}</td>
+      <td class="r ${tone(r.pnlSol)}">${solU(fSol(r.pnlSol, true))}<em>${fUsd(r.pnlUsd, true)}</em></td>
       <td class="r ${tone(r.pnlSol)}">${r.pnlPct != null ? pct(r.pnlPct) : '—'}${r.p.unknown ? '<span class="pf-flag" title="Some tokens came in by transfer, so part of the cost is unknown">basis?</span>' : ''}${r.p.partial ? '<span class="pf-flag" title="Only the latest trades were read">partial</span>' : ''}</td>
       <td class="r">${nTone(r.p.buys, 'up')}/${nTone(r.p.sells, 'down')}</td>
       <td class="r">${dur(r.p.last - r.p.first)}</td>
       <td class="r"><span data-age="${r.p.last}">${ago(r.p.last)}</span></td>
       <td class="pf-act"><button class="pf-ic" data-share="${esc(r.mint)}" title="Make a PnL card" aria-label="Make a PnL card">${SHARE}</button></td></tr>`).join('')
     : '';
-  return `<section class="pf-card"><div class="pf-card-h"><h3>History <span class="pf-n">${M.closed.length}</span></h3><span class="pf-mut">Checked ${M.shown.length} of ${M.cands.length} closed coin${M.cands.length === 1 ? '' : 's'}${M.noTrades ? ` · ${M.noTrades} had no trades (airdrops or transfers)` : ''}</span></div>
-    ${tbl('<th>Token</th><th class="r">Bought (SOL)</th><th class="r">Sold (SOL)</th><th class="r">Realized PnL</th><th class="r">Return</th><th class="r">Buys/sells</th><th class="r">Held</th><th class="r">Last trade</th><th></th>', body, M.waitingClosed ? loadingRows(3) : emptyBox('No closed positions found', M.cands.length ? 'None of the coins checked so far has trades on record.' : 'This wallet has no closed token accounts and no Nought trades in this browser.'))}
-    ${left > 0 ? `<button class="pf-more" data-act="more"${b.pending ? ' disabled' : ''}>Check ${Math.min(PAGE_CLOSED, left)} more (${left} left)</button>` : ''}
-    <p class="pf-fine">Cost basis comes from Jupiter's trade index plus the Nought trades logged in this browser, at your average entry. Nought can only find coins whose token accounts still exist in this wallet or that you traded in Nought here: coins whose accounts were closed elsewhere are missing. Tokens received by transfer have no cost, so their PnL is marked "basis?".</p></section>`;
+  return tbl('<th>Token</th><th class="r">Bought</th><th class="r">Sold</th><th class="r">Realized PnL</th><th class="r">Return</th><th class="r">Buys/sells</th><th class="r">Held</th><th class="r" aria-sort="descending" title="Newest first">Last trade</th><th class="r">Action</th>', body, M.waitingClosed ? loadingRows(3) : emptyBox('No closed positions found', M.cands.length ? 'None of the coins checked so far has trades on record.' : 'This wallet has no closed token accounts and no Nought trades in this browser.', '', CLOCK));
+}
+
+// the latest fills beside the tables (the Activity tab has them all)
+function feedHtml(b, M) {
+  const f = [...M.fills].sort((x, y) => y.at - x.at).slice(0, 40), loading = !!(b.pending || b.busy);
+  const rows = f.map((x) => `<div class="pf-fr" data-mint="${esc(x.mint)}" title="${esc(`${x.side === 'buy' ? 'Bought' : 'Sold'} ${fTok(x.tokens)} ${symOf(x.m)} for ${fSol(x.sol)} SOL (${usd(x.usd, 2)})`)}">
+      <span class="${x.side === 'buy' ? 'up' : 'down'}">${x.side === 'buy' ? 'Buy' : 'Sell'}</span><span class="pf-ft">${avatar(x.m, 'sm')}<b>${esc(symOf(x.m))}</b>${x.nought ? '<span class="pf-flag acc" title="Made in Nought">N</span>' : ''}</span>
+      <span class="r">${solU(fSol(x.sol))}</span><span class="r dim" data-age="${x.at}">${ago(x.at)}</span></div>`).join('');
+  return `<aside class="pf-side" aria-label="Latest fills"><div class="pf-lh"><h3 class="pf-sh">Activity <b>${M.fills.length}</b></h3><a class="pf-all" href="#/portfolio/activity">View all ›</a></div>
+    <div class="pf-fhs">${'<div class="pf-fh"><span>Type</span><span>Token</span><span class="r">Amount</span><span class="r">Age</span></div>'.repeat(3)}</div>
+    <div class="pf-feed${rows ? ' rows' : ''}">${rows || (loading ? loadingRows(4) : emptyBox('No activity', '', '', ACTIV))}</div></aside>`;
 }
 
 // ---- Activity ----
@@ -502,9 +624,9 @@ function activityHtml(b, M) {
       <td class="r">${SIG.test(x.sig) ? `<a href="https://solscan.io/tx/${esc(x.sig)}" target="_blank" rel="noopener" title="Open on Solscan">Solscan</a>` : '—'}</td></tr>`;
   }).join('');
   return `<section class="pf-card"><div class="pf-card-h"><h3>Activity <span class="pf-n">${f.length}</span></h3>
-      <div class="pf-seg">${[['all', 'All'], ['buy', 'Buys'], ['sell', 'Sells']].map(([v, l]) => `<button data-af="${v}" class="${v === TAB_STATE.af ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <div class="seg sm pf-seg" role="group" aria-label="Show">${[['all', 'All'], ['buy', 'Buys'], ['sell', 'Sells']].map(([v, l]) => `<button data-af="${v}" class="${v === TAB_STATE.af ? 'on' : ''}" aria-pressed="${v === TAB_STATE.af}">${l}</button>`).join('')}</div>
       <span class="pf-mut">${coins} coin${coins === 1 ? '' : 's'} · ${loading ? 'loading more…' : 'newest first'}</span></div>
-    ${tbl('<th>Age</th><th>Type</th><th>Token</th><th class="r">Amount</th><th class="r">SOL</th><th class="r">USD</th><th class="r">MC at fill</th><th class="r">Tx</th>', rows, loading ? loadingRows(4) : emptyBox('No fills yet', 'Trades for the coins this wallet holds or closed show up here.'))}
+    ${tbl('<th aria-sort="descending" title="Newest first">Age</th><th>Type</th><th>Token</th><th class="r">Amount</th><th class="r">SOL</th><th class="r">USD</th><th class="r">MC at fill</th><th class="r">Tx</th>', rows, loading ? loadingRows(4) : emptyBox('No fills yet', 'Trades for the coins this wallet holds or closed show up here.', '', ACTIV))}
     ${f.length > TAB_STATE.aLimit ? `<button class="pf-more" data-act="amore">Show ${Math.min(200, f.length - TAB_STATE.aLimit)} more</button>` : ''}
     ${M.cands.length > M.shown.length ? `<button class="pf-more" data-act="more"${b.pending ? ' disabled' : ''}>Check older closed coins (${M.cands.length - M.shown.length} left)</button>` : ''}
     <p class="pf-fine">Fills come from Jupiter's trade index for the ${FILL_CAP} largest holdings and the closed coins checked so far, plus Nought trades logged in this browser (marked N). MC at fill uses today's supply.</p></section>`;
@@ -540,8 +662,8 @@ function calendarPng(b, M) {
   const c = TAB_STATE.cal, D = calData(M.events, c.y, c.m), first = (new Date(c.y, c.m, 1).getDay() + 6) % 7, n = new Date(c.y, c.m + 1, 0).getDate();
   const rows = Math.ceil((first + n) / 7), cw = 156, ch = 104, pad = 52, top = 190, W = pad * 2 + cw * 7, H = top + 40 + rows * ch + 70;
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-  const x = cv.getContext('2d'), S = '"Geist", system-ui, sans-serif', Mo = '"Geist Mono", ui-monospace, monospace', up = '#2fd38b', down = '#ff5d6c', fg = '#e7e9ef', mut = '#7d8496';
-  x.fillStyle = '#07080b'; x.fillRect(0, 0, W, H);
+  const x = cv.getContext('2d'), S = '"Geist", system-ui, sans-serif', Mo = S, up = '#12af80', down = '#f25461', fg = '#fcfcfc', mut = '#828598';
+  x.fillStyle = '#06070b'; x.fillRect(0, 0, W, H);
   x.lineCap = 'round'; x.strokeStyle = fg; x.lineWidth = 6; x.beginPath(); x.arc(pad + 16, 62, 16, 0, Math.PI * 2); x.stroke();
   x.strokeStyle = '#38d6f5'; x.lineWidth = 5; x.beginPath(); x.moveTo(pad + 4, 74); x.lineTo(pad + 28, 50); x.stroke();
   x.fillStyle = fg; x.font = `600 30px ${S}`; x.textBaseline = 'middle'; x.fillText('nought', pad + 46, 63);
@@ -553,8 +675,8 @@ function calendarPng(b, M) {
   const peak = Math.max(1e-9, D.best, -D.worst);
   for (let d = 1; d <= n; d++) {
     const i = first + d - 1, X = pad + (i % 7) * cw, Y = top + 36 + Math.floor(i / 7) * ch, v = D.days.get(d);
-    x.fillStyle = v ? (v.sol >= 0 ? `rgba(47,211,139,${0.1 + 0.5 * Math.min(1, v.sol / peak)})` : `rgba(255,93,108,${0.1 + 0.5 * Math.min(1, -v.sol / peak)})`) : '#0c0e13';
-    x.fillRect(X + 3, Y + 3, cw - 6, ch - 6); x.strokeStyle = '#1b1f29'; x.lineWidth = 1; x.strokeRect(X + 3.5, Y + 3.5, cw - 7, ch - 7);
+    x.fillStyle = v ? (v.sol >= 0 ? `rgba(18,175,128,${0.12 + 0.5 * Math.min(1, v.sol / peak)})` : `rgba(242,84,97,${0.12 + 0.5 * Math.min(1, -v.sol / peak)})`) : '#101114';
+    x.fillRect(X + 3, Y + 3, cw - 6, ch - 6); x.strokeStyle = '#22242d'; x.lineWidth = 1; x.strokeRect(X + 3.5, Y + 3.5, cw - 7, ch - 7);
     x.fillStyle = mut; x.font = `500 16px ${Mo}`; x.fillText(String(d), X + 14, Y + 24);
     if (v) { x.fillStyle = fg; x.font = `600 22px ${Mo}`; x.fillText(fSol(v.sol, true), X + 14, Y + 62); x.fillStyle = mut; x.font = `400 14px ${S}`; x.fillText(`${v.n} sell${v.n === 1 ? '' : 's'}`, X + 14, Y + 86); }
   }
@@ -648,6 +770,7 @@ function onClick(e) {
   const t = e.target.closest('button'); if (!t || !ctx) return;
   const b = ctx.addr ? book(ctx.addr) : null, act = t.dataset.act;
   if (t.dataset.range) { TAB_STATE.range = t.dataset.range; LS.set('pf.range', TAB_STATE.range); renderBody(); return; }
+  if (t.dataset.list) { TAB_STATE.list = t.dataset.list === 'closed' ? 'closed' : 'open'; renderBody(); return; }
   if (t.dataset.af) { TAB_STATE.af = t.dataset.af; TAB_STATE.aLimit = 200; renderBody(); return; }
   if (t.dataset.cal) { const k = Number(t.dataset.cal), now = new Date(), c = TAB_STATE.cal || { y: now.getFullYear(), m: now.getMonth() }, d = k ? new Date(c.y, c.m + k, 1) : now; TAB_STATE.cal = { y: d.getFullYear(), m: d.getMonth() }; renderBody(); return; }
   if (t.dataset.sell) { const p = parseAmount(t.dataset.pct); if (isMint(t.dataset.sell) && p > 0 && p <= 100) sellFlow(t.dataset.sell, p); return; }
@@ -686,7 +809,7 @@ function sellFlow(mint, pctN) {
   let rev = null; // {raw (BigInt), minOutRaw, impactPct, danger, at}
   const d = document.createElement('dialog'); d.className = 'pfs-dlg';
   d.innerHTML = `<form method="dialog" class="dlg"><h2>Sell ${pctN}% of ${esc(sym)}</h2><div class="pf-q" data-q><div class="pf-mut">Getting a quote…</div></div>
-    <div class="row-end"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn pf-go" value="ok" data-go disabled>Sell ${pctN}%</button></div></form>`;
+    <div class="row-end"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn btn-sell pf-go" value="ok" data-go disabled>Sell ${pctN}%</button></div></form>`;
   document.body.appendChild(d);
   d.addEventListener('close', async () => {
     setTimeout(() => d.remove(), 0);

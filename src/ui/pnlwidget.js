@@ -2,7 +2,8 @@
 // started this session (or last pressed Reset). Value = SOL + every token Jupiter lists in the wallet × its USD price,
 // counted in SOL. Deposits and withdrawals move it too, and the box says so. Draggable by its header; position,
 // colours, unit and on/off are kept in this browser, and so is one snapshot per wallet. Polls Jupiter every 15 s while
-// the tab is visible. togglePnlWidget(force?) → bool (open or not). Styles: css/shell.css (.pnlw). It follows the theme
+// the tab is visible. togglePnlWidget(force?) → bool (open or not). Styles: css/shell.css places and docks .pnlw, its look
+// (a compact card like the rest of the app) is in css/portfolio.css. It follows the theme
 // until colours are picked in its own settings; on a phone (≤760 px) CSS docks it above the bottom edge and it can't
 // be dragged.
 import { esc, short, usd, ago, LS, on, ICON } from '../core/util.js';
@@ -11,7 +12,7 @@ import { ju } from '../core/jup.js';
 import { pricesFor, solUsd } from '../core/price.js';
 
 const EVERY = 15000, MAX_PRICED = 150, HEX = /^#[0-9a-f]{6}$/i;
-const DEF_STYLE = { bg: '#0c0e13', fg: '#e7e9ef', alpha: 0.94 };
+const DEF_STYLE = { bg: '#101114', fg: '#fcfcfc', alpha: 0.94 };
 const phone = () => matchMedia('(max-width: 760px)').matches;
 let el = null, timer = 0, later = 0, offs = [], busy = false, last = null, err = '';
 const lastPx = new Map(); // mint → last good USD price, so a missing quote doesn't look like a crash
@@ -22,7 +23,8 @@ const snapOf = (owner) => { const x = owner ? snaps()[owner] : null, at = Number
 function setSnap(owner, v) { const s = snaps(); s[owner] = { at: Date.now(), sol: v.sol }; const keys = Object.keys(s); if (keys.length > 20) delete s[keys[0]]; LS.set('pnlw.snaps', s); }
 // colours picked in the widget's settings, or null: no pick yet (or Default pressed), so it follows the theme
 const custom = () => { const v = LS.get('pnlw.style', null); return v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length ? v : null; };
-const themed = () => { const cs = getComputedStyle(document.documentElement), hex = (n, d) => { const v = cs.getPropertyValue(n).trim(); return HEX.test(v) ? v : d; }; return { bg: hex('--panel', DEF_STYLE.bg), fg: hex('--fg', DEF_STYLE.fg), alpha: DEF_STYLE.alpha }; };
+// the theme's panel and text colours as #rrggbb (Light's panel is written #fff)
+const themed = () => { const cs = getComputedStyle(document.documentElement), hex = (n, d) => { let v = cs.getPropertyValue(n).trim(); if (/^#[0-9a-f]{3}$/i.test(v)) v = '#' + [...v.slice(1)].map((c) => c + c).join(''); return HEX.test(v) ? v : d; }; return { bg: hex('--panel', DEF_STYLE.bg), fg: hex('--fg', DEF_STYLE.fg), alpha: DEF_STYLE.alpha }; };
 const style = () => { const s = { ...themed(), ...(custom() || {}) }; if (!HEX.test(s.bg)) s.bg = DEF_STYLE.bg; if (!HEX.test(s.fg)) s.fg = DEF_STYLE.fg; s.alpha = Math.min(1, Math.max(0.4, Number(s.alpha) || DEF_STYLE.alpha)); return s; };
 const rgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
 const fSol = (n) => { const a = Math.abs(n), d = a >= 100 ? 1 : a >= 1 ? 2 : a >= 0.01 ? 3 : 4; return (n > 0 ? '+' : n < 0 ? '-' : '') + a.toFixed(d); };

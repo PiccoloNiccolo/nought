@@ -3,7 +3,7 @@
 // Always write through upsert(): it stamps freshness, applies the migration rule and fires 'tokens'.
 //
 // Token fields (all optional except mint):
-//   identity   mint, name, symbol, uri, image, description, decimals, tokenProgram, verified, tags[]
+//   identity   mint, name, symbol, uri, image, imagePump (pump.fun CDN copy, once ready), description, decimals, tokenProgram, verified, tags[]
 //   socials    twitter, telegram, website (safe URLs), xHandle, xFollowers
 //   launch     created (ms), dev (creator wallet), launchpad (Jupiter id: 'pump.fun' | 'letsbonk.fun' |
 //              'raydium-launchlab' | 'met-dbc' | 'bags.fun' | 'moonshot' | 'jup-studio' | 'stonkfun' | ...), metaLaunchpad
@@ -31,7 +31,7 @@ export const progressFromMcSol = (mcSol) => (mcSol > 0 ? curveProgress(Math.sqrt
 
 export const tokens = new Map();
 // the saved board is read back field by field: storage can hold anything (an imported settings file, an old version)
-const URLS = new Set(['image', 'imageOriginal', 'imageAlt', 'twitter', 'telegram', 'website']), SKIP = new Set(['__proto__', 'constructor', 'prototype', 'traders', 'pair', 'fresh']);
+const URLS = new Set(['image', 'imageOriginal', 'imageAlt', 'imagePump', 'twitter', 'telegram', 'website']), SKIP = new Set(['__proto__', 'constructor', 'prototype', 'traders', 'pair', 'fresh']);
 function revive(t) {
   if (!t || typeof t !== 'object' || Array.isArray(t) || !isMint(t.mint)) return null;
   const o = {};
@@ -51,7 +51,7 @@ for (const t of (Array.isArray(saved) ? saved : []).map(revive)) if (t && Date.n
 export function upsert(mint, patch = {}) {
   let t = tokens.get(mint);
   if (!t) { t = { mint, created: Date.now(), volSol: 0, buys: 0, sells: 0, progress: 0, mcSol: 0, traders: new Set() }; tokens.set(mint, t); }
-  const artworkChanged = ['image', 'imageOriginal', 'imageAlt', 'uri'].some(k => patch[k] !== undefined && patch[k] !== t[k]);
+  const artworkChanged = ['image', 'imageOriginal', 'imageAlt', 'imagePump', 'uri'].some(k => patch[k] !== undefined && patch[k] !== t[k]);
   for (const [k, v] of Object.entries(patch)) if (v !== undefined) t[k] = v;
   const now = Date.now(); t.seenAt = now;
   if (patch.mcSol > 0) t.mcSolAt = patch.mcSolAt || now;

@@ -1,11 +1,11 @@
 // The app frame. Pages render into #view; everything around it lives here:
-//   top bar      nav (a menu button below 1100 px; Vision has its own link into #/track/vision), search, presets
-//                P1–P3, watchlist-strip star, live PnL widget, notifications bell, settings, wallet pill with a menu
-//                (manage, deposit, withdraw, convert SOL⇄USDC, fees saved, disconnect)
-//   ticker       the watchlist strip under the top bar: LS 'watch' (kept by src/core/watchlist.js), Jupiter prices
-//                every 10 s, redrawn at once on util 'watch'. It takes no space at all while the watchlist is empty
-//                and can be switched off (star button, key T, Settings > Display).
-//   status bar   connection dots (pump.fun stream, Jupiter feed, RPC), BTC/ETH, active preset, fees saved, links
+//   top bar      nav (a menu button below 1240 px; Vision has its own link into #/track/vision), search pill, the 0%
+//                fee badge, presets P1–P3, strip star, live PnL widget, notifications bell, settings, then Connect, or
+//                Deposit + the wallet pill with a menu (manage, deposit, withdraw, convert SOL⇄USDC, fees saved, disconnect)
+//   strip        the coin strip under the top bar (src/ui/ticker.js): watchlist, recently viewed or trending coins
+//   status bar   preset chip (pick P1–P3), wallet chip (opens the wallet menu), settings, shortcuts (wallet manager,
+//                Discover, Pulse, Trackers, Watchlist, PnL widget), fees saved, BTC/ETH/SOL, one connection pill whose
+//                panel lists the pump.fun stream, the Jupiter feed and the RPC, links
 //   keys         rebindable hotkeys (Settings > Hotkeys), theme (Settings > Display), the quick preset dialog
 //   clicks       [data-copy] copies, [data-qb] quick-buys, [data-qs][data-pct] quick-sells, [data-mint] opens a coin,
 //                [data-close] closes its dialog
@@ -14,24 +14,27 @@
 //              colors are the resolved tokens {bg, panel, panel2, line, line2, fg, muted, dim, accent, up, down, warn}
 //              for canvas code (charts) that can't read CSS variables. Subscribe with on('theme', fn) and call the
 //              returned unsubscribe in your page cleanup.
-//   'ticker'   bool: the watchlist strip was switched on (true) or off (false)
+//   'ticker'   bool: the strip was switched on (true) or off (false) (sent by src/ui/ticker.js)
 //   'pnlwidget' bool: the live PnL widget opened (true) or closed (false), from any of its switches
 //   'hotkeys'  the full binding map after a change
 // The order engine is started by app.js once the saved wallet is back.
-import { $, $$, esc, safeUrl, on, emit, toast, copy, isMint, LS, short, usd, ICON, parseAmount } from '../core/util.js';
+import { $, $$, esc, on, emit, toast, copy, isMint, LS, short, usd, ICON, parseAmount } from '../core/util.js';
+import { savedVs } from '../core/fee-compare.js';
 import { settings, set, setPreset, PRIO, preset, rpcUrl } from '../core/settings.js';
-import { wallet, openWalletPicker, disconnectWallet, toRaw } from '../core/wallet.js';
-import { solUsd, pricesFor } from '../core/price.js';
-import { img } from '../core/meta.js';
-import { quickBuy, quickSell, quoteFor, quoteDetails, impactWarning, trade, feesSaved, SOL_MINT } from '../core/trade.js';
+import { wallet, openWalletPicker, disconnectWallet, toRaw, selectWallet, tradeOwners, MAX_SELECTED } from '../core/wallet.js';
+import * as V from '../core/vault.js';
+import { solUsd } from '../core/price.js';
+import { quickBuy, quickSell, quoteFor, quoteDetails, impactWarning, trade, feesSaved, SOL_MINT, multiMode, setMultiMode } from '../core/trade.js';
 import * as tradeX from '../core/trade.js'; // optional exports (minOutOf): a namespace lookup can't break module linking
 import { solBalance } from '../core/rpc.js';
-import { jt, ju, ds } from '../core/jup.js';
+import { ju } from '../core/jup.js';
 import { state as stream } from '../core/stream.js';
 import { feed } from '../core/seed.js';
 import { tokens } from '../core/store.js';
 import { openSearch } from './search.js';
-import { initAlerts, popover, openBell, fmtPrice, USDC_MINT } from './alerts.js';
+import { initAlerts, popover, openBell, USDC_MINT } from './alerts.js';
+import { initTicker, toggleTicker, tickerHidden } from './ticker.js';
+import { initRecent } from './recent.js';
 
 const wui = () => import('./wallets.js'); // the wallet manager loads on first use
 const hidden = () => document.hidden;
@@ -103,19 +106,16 @@ export const HOTKEYS = [
   { id: 'preset1', label: 'Use preset 1', def: '1' },
   { id: 'preset2', label: 'Use preset 2', def: '2' },
   { id: 'preset3', label: 'Use preset 3', def: '3' },
-  { id: 'goPulse', label: 'Go to Pulse', def: 'g p' },
-  { id: 'goDiscover', label: 'Go to Discover', def: 'g d' },
+  { id: 'goPulse', label: 'Go to Scope', def: 'g p' },
   { id: 'goTrack', label: 'Go to Trackers', def: 'g t' },
-  { id: 'goVision', label: 'Go to Vision', def: 'g v' },
   { id: 'goPortfolio', label: 'Go to Portfolio', def: 'g f' },
   { id: 'goWatch', label: 'Go to Watchlist', def: 'g w' },
-  { id: 'goPerps', label: 'Go to Perps', def: 'g x' },
   { id: 'goHome', label: 'Go to the home page', def: 'g h' },
   { id: 'goSettings', label: 'Open settings', def: 'g s' },
   { id: 'wallet', label: 'Open the wallet menu', def: 'w' },
   { id: 'convert', label: 'Convert SOL ⇄ USDC', def: 'c' },
   { id: 'alerts', label: 'Open notifications', def: 'n' },
-  { id: 'ticker', label: 'Show or hide the watchlist strip', def: 't' },
+  { id: 'ticker', label: 'Show or hide the coin strip', def: 't' },
   { id: 'pnl', label: 'Show or hide the live PnL widget', def: 'p' },
   { id: 'help', label: 'Show these hotkeys', def: '?' },
 ];
@@ -153,7 +153,7 @@ export function comboOf(e) {
 }
 const KEY_NAMES = { Meta: navigator.platform?.startsWith('Mac') ? '⌘' : 'Win', Space: 'Space', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Escape: 'Esc' };
 export const comboLabel = (c) => (c ? c.split(' ').map((step) => step.split('+').map((k) => KEY_NAMES[k] || (k.length === 1 ? k.toUpperCase() : k)).join('+')).join(' then ') : '');
-const GO = { goPulse: '#/pulse', goDiscover: '#/discover', goTrack: '#/track', goVision: '#/track/vision', goPortfolio: '#/portfolio', goWatch: '#/watch', goPerps: '#/perps', goHome: '#/', goSettings: '#/settings' };
+const GO = { goPulse: '#/scope', goDiscover: '#/discover', goTrack: '#/track', goVision: '#/track/explore', goPortfolio: '#/portfolio', goWatch: '#/watch', goPerps: '#/perps', goHome: '#/', goSettings: '#/settings' };
 function runHotkey(id) {
   if (id === 'search') openSearch();
   else if (/^preset[123]$/.test(id)) { set({ preset: Number(id.slice(-1)) - 1 }); toast(`Preset ${esc(preset().name)}: buy ${esc(String(preset().buy))} SOL`); }
@@ -187,10 +187,10 @@ function onKey(e) {
 // Change it only through setTheme(patch): that saves it, applies it, then emits util 'theme' {name, accent, colors}.
 // A change made in another tab is applied here and emits the same event (see initShell).
 export const THEMES = [
-  { id: 'dark', name: 'Nought Dark', sw: ['#101114', '#1b1d23', '#8c9dff'] },
-  { id: 'grey', name: 'Grey', sw: ['#15171c', '#22262e', '#38d6f5'] },
-  { id: 'oled', name: 'OLED black', sw: ['#000000', '#0a0b0e', '#38d6f5'] },
-  { id: 'light', name: 'Light', sw: ['#f3f4f7', '#ffffff', '#087893'] },
+  { id: 'dark', name: 'Nought Dark', sw: ['#06070b', '#101114', '#526fff'] },
+  { id: 'grey', name: 'Grey', sw: ['#131418', '#1a1b20', '#526fff'] },
+  { id: 'oled', name: 'OLED black', sw: ['#000000', '#060608', '#526fff'] },
+  { id: 'light', name: 'Light', sw: ['#f4f5f8', '#ffffff', '#3d5af1'] },
 ];
 export const ACCENTS = ['#8c9dff', '#38d6f5', '#7c8cff', '#2fd38b', '#ffc24b', '#ff7ab6', '#ff8a3d', '#c3f53b'];
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -243,87 +243,8 @@ export async function probeRpc(url = rpcUrl()) {
   } catch (e) { return { ok: false, ms: Math.round(performance.now() - t0), error: e?.name === 'TimeoutError' ? 'No answer in 7 s' : 'Blocked or offline (CORS or network)' }; }
 }
 
-// ---------------------------------------------------------------- watchlist strip
-// Visible only while it is switched on (tick.hidden false) AND the watchlist has coins: an empty watchlist takes no
-// space at all. The data is LS 'watch' (starred order; the 40 most recent are shown); util 'watch' redraws at once.
-const TICK_MAX = 40;
-const tick = { hidden: !!LS.get('ticker.hidden', false), key: '', renders: 0, meta: new Map(), px: new Map(), asked: new Set(), err: false, busy: false, again: false };
-const watchList = () => { const l = LS.get('watch', []); return Array.isArray(l) ? [...new Set(l.filter(isMint))].slice(-TICK_MAX) : []; };
-export const tickerHidden = () => tick.hidden; // the user's switch, not whether it is on screen right now
-export function toggleTicker(force) {
-  tick.hidden = typeof force === 'boolean' ? !force : !tick.hidden;
-  LS.set('ticker.hidden', tick.hidden);
-  emit('ticker', !tick.hidden);
-  if (!tick.hidden && !watchList().length) toast('The watchlist strip is on. It appears under the top bar once you star a coin.');
-  syncTicker();
-  if (!tick.hidden) pollTicker();
-}
-// show or hide the strip (and keep its switches in step); the layout only changes when its visibility does
-function syncTicker() {
-  const el = $('#ticker'), show = !tick.hidden && watchList().length > 0;
-  $('#ticker-toggle').setAttribute('aria-pressed', String(!tick.hidden));
-  $('#nav-ticker').textContent = tick.hidden ? 'Show watchlist strip' : 'Hide watchlist strip';
-  if (el.hidden !== show) return;
-  el.hidden = !show;
-  window.dispatchEvent(new Event('resize')); // charts size to their box
-}
-const tkSym = (m) => tokens.get(m)?.symbol || tick.meta.get(m)?.symbol || short(m, 3);
-const tkImg = (m) => safeUrl(tokens.get(m)?.image || tick.meta.get(m)?.image || '');
-// $1.23, $0.0123, $0.0₅288 (the subscript counts the zeros, as on the token page)
-function tkPrice(p) { return p == null ? '—' : p >= 1 ? '$' + p.toFixed(p >= 1000 ? 0 : 2) : fmtPrice(Number(p.toPrecision(3))); }
-function tkItem(m, copy) {
-  const s = String(tkSym(m)), i = tkImg(m), q = tick.px.get(m), ch = q?.change24h;
-  return `<a class="tk-i" href="#/t/${esc(m)}"${copy ? ' tabindex="-1" aria-hidden="true"' : ''} data-tk="${esc(m)}">${i ? `<img src="${esc(i)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="tk-av">${esc(s.slice(0, 2).toUpperCase())}</span>`}<b>${esc(s)}</b><span class="px">${tkPrice(q?.price)}</span><span class="ch ${ch > 0 ? 'up' : ch < 0 ? 'down' : 'muted'}">${ch == null ? '' : (ch > 0 ? '+' : '') + ch.toFixed(Math.abs(ch) >= 100 ? 0 : 1) + '%'}</span></a>`;
-}
-function renderTicker(force = false) {
-  syncTicker();
-  if (tick.hidden) return;
-  const list = watchList(), track = $('#tk-track'), key = list.join(',') + '|' + list.map(tkSym).join(',');
-  if (!list.length) { tick.key = ''; tick.renders++; track.className = 'tk-track'; track.style.removeProperty('--tk-dur'); track.innerHTML = ''; return; }
-  if (key === tick.key && !force) { // same coins: update numbers in place so the scroll doesn't jump
-    for (const el of $$('[data-tk]', track)) { const q = tick.px.get(el.dataset.tk), ch = q?.change24h, c = el.querySelector('.ch'); el.querySelector('.px').textContent = tkPrice(q?.price); c.className = 'ch ' + (ch > 0 ? 'up' : ch < 0 ? 'down' : 'muted'); c.textContent = ch == null ? '' : (ch > 0 ? '+' : '') + ch.toFixed(Math.abs(ch) >= 100 ? 0 : 1) + '%'; }
-    return;
-  }
-  tick.key = key;
-  const n = ++tick.renders;
-  track.className = 'tk-track'; track.style.removeProperty('--tk-dur');
-  track.innerHTML = list.map((m) => tkItem(m, false)).join('');
-  // scroll only when it doesn't fit: a second copy makes the loop seamless
-  requestAnimationFrame(() => {
-    if (n !== tick.renders) return; // a newer render replaced this one
-    const vp = $('#tk-viewport'), w = track.scrollWidth;
-    if (w > vp.clientWidth + 4) { track.insertAdjacentHTML('beforeend', list.map((m) => tkItem(m, true)).join('')); track.style.setProperty('--tk-dur', Math.max(20, Math.round(w / 45)) + 's'); track.classList.add('run'); }
-  });
-}
-// names for coins the store doesn't know: Dexscreener first (its queue is quick), then Jupiter search
-function tickerNames(list) {
-  const missing = list.filter((m) => !tokens.get(m)?.symbol && !tick.meta.get(m)?.symbol && !tick.asked.has(m));
-  if (!missing.length) return;
-  missing.forEach((m) => tick.asked.add(m));
-  ds.tokens(missing).then((map) => { for (const [m, p] of map) if (p?.baseToken?.symbol) tick.meta.set(m, { symbol: String(p.baseToken.symbol).slice(0, 24), image: img(p.info?.imageUrl) }); }).catch(() => {})
-    .then(() => { const rest = missing.filter((m) => !tick.meta.get(m)?.symbol); renderTicker(); return rest.length ? jt.search(rest) : []; })
-    .then((l) => { for (const t of l) if (t.symbol) tick.meta.set(t.mint, { symbol: t.symbol, image: t.image }); if (l.length) renderTicker(); })
-    .catch(() => {})
-    .finally(() => missing.forEach((m) => { if (!tick.meta.get(m)?.symbol) tick.asked.delete(m); }));
-}
-async function pollTicker() {
-  if (tick.hidden || hidden()) { syncTicker(); return; }
-  renderTicker(); // the coins show at once; prices fill in when they arrive
-  const list = watchList();
-  if (!list.length) return;
-  if (tick.busy) { tick.again = true; return; } // a coin starred mid-fetch gets its price right after
-  tick.busy = true;
-  tickerNames(list);
-  try {
-    // prices: Jupiter, then Dexscreener for whatever it misses (pricesFor)
-    const px = await pricesFor(list), next = new Map(tick.px);
-    const nn = (v) => (v == null || !isFinite(Number(v)) ? null : Number(v));
-    for (const [m, p] of px) next.set(m, { price: nn(p?.priceUsd), change24h: nn(p?.change24h) });
-    tick.px = next; tick.err = false;
-  } catch { tick.err = true; } finally { tick.busy = false; }
-  renderTicker();
-  if (tick.again) { tick.again = false; pollTicker(); }
-}
+// ---------------------------------------------------------------- coin strip (src/ui/ticker.js)
+export { toggleTicker, tickerHidden };
 
 // ---------------------------------------------------------------- live PnL widget (src/ui/pnlwidget.js, loaded on use)
 const pnlMod = () => import('./pnlwidget.js');
@@ -331,6 +252,7 @@ export const pnlShown = () => !!document.querySelector('body > .pnlw');
 let pnlWas = null;
 function syncPnl(open = pnlShown()) {
   $('#pnl-toggle')?.setAttribute('aria-pressed', String(open));
+  $('#st-pnl')?.setAttribute('aria-pressed', String(open));
   const n = $('#nav-pnl'); if (n) n.textContent = open ? 'Hide live PnL widget' : 'Show live PnL widget';
   if (pnlWas !== null && pnlWas !== open) emit('pnlwidget', open);
   pnlWas = open;
@@ -343,9 +265,28 @@ export function togglePnl(force) {
 // the header buttons' tooltips name the current keys
 function keyTitles() {
   const k = hotkeys(), with$ = (label, id) => label + (k[id] ? ` (${comboLabel(k[id])})` : '');
-  $('#ticker-toggle').title = with$('Show or hide the watchlist strip', 'ticker');
+  $('#ticker-toggle').title = with$('Show or hide the coin strip', 'ticker');
   $('#pnl-toggle').title = with$('Show or hide the live PnL widget', 'pnl');
+  if (presetMenu?.isOpen()) renderPresetMenu();
 }
+
+// ---------------------------------------------------------------- icons used by the frame
+const svg = (d, w = 15, cls = '') => `<svg${cls ? ` class="${cls}"` : ''} viewBox="0 0 24 24" width="${w}" height="${w}" aria-hidden="true">${d}</svg>`;
+const IC = {
+  wallet: '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H17v3M4 7.5V17a2 2 0 0 0 2 2h13a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1H6.5A2.5 2.5 0 0 1 4 7.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="16" cy="13.5" r="1.3" fill="currentColor"/>',
+  caret: '<path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
+  manage: '<rect x="4" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="13" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M16.5 13.5v6M13.5 16.5h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  key: '<circle cx="8" cy="15" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m11 12 8.5-8.5M16.5 6.5l2.5 2.5M14.5 8.5l2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  deposit: '<path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  withdraw: '<path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M5 19.5h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  swap: '<path d="M7 4v15m0 0-3.5-3.5M7 19l3.5-3.5M17 20V5m0 0-3.5 3.5M17 5l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  out: '<path d="M14 5h4a1.5 1.5 0 0 1 1.5 1.5v11A1.5 1.5 0 0 1 18 19h-4M10 16.5 5.5 12 10 7.5M5.5 12H15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="15" cy="7" r="2.2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="17" r="2.2" fill="none" stroke="currentColor" stroke-width="2"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16v4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
+};
+// the Solana mark next to SOL amounts (its gradient is defined once in index.html)
+export const solIcon = (w = 12) => `<svg class="sol-ic" viewBox="0 0 24 24" width="${w}" height="${w}" aria-hidden="true"><path d="M6.8 4.5h14l-3.6 3.8h-14z"/><path d="M3.2 10.1h14l3.6 3.8h-14z"/><path d="M6.8 15.7h14l-3.6 3.8h-14z"/></svg>`;
 
 // ---------------------------------------------------------------- wallet pill + menu
 let walletMenu = null;
@@ -357,37 +298,48 @@ async function refreshBalance() {
   try { const s = await solBalance(owner); if (my === balSeq && owner === wallet.owner) bal.sol = s; } catch { /* keep the last one */ }
   walletUi();
 }
+// the top pill, Deposit next to it, and the status bar's wallet chip
 function walletUi() {
-  const wb = $('#wallet-btn');
+  const wb = $('#wallet-btn'), dep = $('#deposit-btn'), sw = $('#st-wallet');
   if (!wallet.owner) {
     walletMenu?.close(false);
     wb.className = 'wpill connect'; wb.textContent = 'Connect'; wb.title = 'Connect a wallet';
     wb.setAttribute('aria-haspopup', 'dialog'); wb.setAttribute('aria-label', 'Connect a wallet');
+    if (dep) dep.hidden = true;
+    if (sw) sw.hidden = true;
     return;
   }
-  const b = bal.owner === wallet.owner ? fmtSol(bal.sol) : '—', local = wallet.kind === 'local';
+  const b = bal.owner === wallet.owner ? fmtSol(bal.sol) : '—', local = wallet.kind === 'local', many = tradeOwners().length;
   wb.className = 'wpill'; wb.setAttribute('aria-haspopup', 'menu');
-  wb.innerHTML = `<i class="wp-kind ${local ? 'local' : ''}" aria-hidden="true"></i><span class="wp-name">${esc(wallet.name || short(wallet.owner))}</span><span class="wp-bal">${b}<span class="dim"> SOL</span></span><svg class="wp-car" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-  wb.title = `${wallet.name || 'Wallet'} (${local ? 'local wallet in this browser' : 'browser extension'}) ${wallet.owner}`;
-  wb.setAttribute('aria-label', `${wallet.name || 'Wallet'}, ${b} SOL: open the wallet menu`);
+  wb.innerHTML = `${svg(IC.wallet, 15, 'wp-ic')}${many > 1 ? `<span class="wp-n">${many}</span>` : ''}${local ? '<i class="wp-kind" aria-hidden="true"></i>' : ''}${solIcon(13)}<span class="wp-bal">${b}</span>${svg(IC.caret, 12, 'wp-car')}`;
+  wb.title = `${wallet.name || 'Wallet'} (${local ? 'local wallet in this browser' : 'browser extension'}) ${wallet.owner}${many > 1 ? ` · ${many} wallets trade together` : ''}`;
+  wb.setAttribute('aria-label', `${wallet.name || 'Wallet'}, ${b} SOL${many > 1 ? `, ${many} wallets trade together` : ''}: open the wallet menu`);
+  if (dep) dep.hidden = false;
+  if (sw) {
+    sw.hidden = false;
+    sw.innerHTML = `${svg(IC.wallet, 13)}<span>${many}</span>${solIcon(11)}<span class="bal-u">${b}</span>${svg(IC.caret, 10, 'car')}`;
+    sw.title = `${many > 1 ? `${many} wallets trade together · ` : ''}${wallet.name || 'Wallet'}: ${b} SOL`;
+    sw.setAttribute('aria-label', `${many} wallet${many === 1 ? '' : 's'} trading, active wallet ${b} SOL: open the wallet menu`);
+  }
 }
 function renderWalletMenu() {
   const m = $('#wallet-menu'), local = wallet.kind === 'local', fs = savedFees(), owner = wallet.owner;
   if (!owner) { m.innerHTML = ''; return; }
-  const picked = Array.isArray(wallet.selected) ? wallet.selected.length : 0;
+  const item = (a, icon, label, hint = '', extra = '') => `<button type="button" role="menuitem" data-wa="${a}"${extra}>${svg(icon, 15)}<span>${label}</span>${hint ? `<small>${hint}</small>` : ''}</button>`;
   m.innerHTML = `<div class="wm-headbox">
-      <div class="l"><b>${esc(wallet.name || 'Wallet')}</b><span class="wm-kindtag ${local ? 'local' : ''}">${local ? 'Local' : 'Extension'}</span></div>
-      <div class="addr"><span>${esc(short(owner, 6))}</span><button type="button" data-copy="${esc(owner)}" aria-label="Copy address" title="Copy address">${ICON.copy}</button></div>
-      <div class="wm-bals"><span>SOL <b id="wmb-sol">${bal.owner === owner && bal.sol != null ? fmtSol(bal.sol) : '…'}</b></span><span>USDC <b id="wmb-usdc">…</b></span></div>
-      ${picked > 1 ? `<span class="wm-multi">${picked} local wallets picked for multi-wallet trades</span>` : ''}
+      <div class="l"><span class="wm-av" aria-hidden="true">${svg(IC.wallet, 15)}</span><div class="wm-who"><b>${esc(wallet.name || 'Wallet')}</b><div class="addr"><span>${esc(short(owner, 5))}</span><button type="button" data-copy="${esc(owner)}" aria-label="Copy address" title="Copy address">${ICON.copy}</button></div></div><span class="wm-kindtag ${local ? 'local' : ''}">${local ? 'Local' : 'Extension'}</span></div>
+      <div class="wm-bals"><span>SOL<b>${solIcon(13)}<span id="wmb-sol">${bal.owner === owner && bal.sol != null ? fmtSol(bal.sol) : '…'}</span></b></span><span>USDC<b><i class="usdc-ic" aria-hidden="true"></i><span id="wmb-usdc">…</span></b></span></div>
     </div>
-    <button type="button" role="menuitem" data-wa="manage">Manage wallets<small>switch · add · lock</small></button>
-    <button type="button" role="menuitem" data-wa="deposit">Deposit<small>address · QR</small></button>
-    <button type="button" role="menuitem" data-wa="withdraw">Withdraw<small>SOL or tokens</small></button>
-    <button type="button" role="menuitem" data-wa="convert">Convert SOL ⇄ USDC<small>via Jupiter</small></button>
+    <div class="wm-multibox" id="wm-multi" aria-live="polite"></div>
+    ${item('deposit', IC.deposit, 'Deposit', 'address · QR')}
+    ${item('withdraw', IC.withdraw, 'Withdraw', 'SOL or tokens')}
+    ${item('convert', IC.swap, 'Convert SOL ⇄ USDC', 'via Jupiter')}
+    ${item('manage', IC.manage, 'Manage wallets', 'switch · add · lock')}
+    ${item('import', IC.key, 'Import wallet', 'private key')}
     ${fs.trades > 0 ? `<div class="wm-saved" role="note"><b>Fees saved: ${fmtSol(fs.sol)} SOL${fs.usd > 0 ? ' · ' + usd(fs.usd, 2) : ''}</b><span>Compared with a typical ${(fs.rate * 100).toFixed(0)}% terminal fee, on ${fs.trades} trade${fs.trades === 1 ? '' : 's'} made in this browser. Nought charges 0%.</span></div>` : ''}
     <div class="wm-sep" role="separator"></div>
-    <button type="button" role="menuitem" data-wa="disconnect" class="danger"${local ? ' title="The keys stay in this browser; pick it again any time from Manage wallets."' : ''}>${local ? 'Stop using this wallet' : 'Disconnect'}</button>`;
+    ${item('disconnect', IC.out, local ? 'Stop using this wallet' : 'Disconnect', '', ` class="danger"${local ? ' title="The keys stay in this browser; pick it again any time from Manage wallets."' : ''}`)}`;
+  renderMultiList();
   ju.balances(owner).then((b) => {
     if (wallet.owner !== owner) return;
     const s = $('#wmb-sol'), u = $('#wmb-usdc');
@@ -395,12 +347,59 @@ function renderWalletMenu() {
     if (u) { const n = Number(b.tokens?.[USDC_MINT]?.ui) || 0; u.textContent = n === 0 ? '0' : n.toFixed(2); }
   }).catch(() => { const u = $('#wmb-usdc'); if (u) u.textContent = '—'; });
 }
+// the status bar's wallet chip opens the same menu, rising from the chip
+let footWas = false;
+function openWalletFromFoot(e) {
+  const sw = $('#st-wallet'), m = $('#wallet-menu');
+  if (!wallet.owner || !walletMenu) return;
+  if (footWas) { footWas = false; return; } // this click closed it (the outside-press handler already did)
+  if (walletMenu.isOpen() && m.classList.contains('at-foot')) { walletMenu.close(); return; }
+  const r = sw.getBoundingClientRect();
+  m.classList.add('at-foot'); m.style.left = Math.max(8, Math.min(innerWidth - 308, r.left)) + 'px';
+  // the chip is the opener: it gets aria-expanded, and focus comes back to it on Escape or after an action
+  walletMenu.open(e.detail === 0, sw);
+}
+// Multi-wallet: tick local wallets here and every buy and sell (Pulse, token page, hotkeys) runs on all of them at once.
+const multiBal = new Map(); // address → {sol, at}
+async function renderMultiList() {
+  const box = $('#wm-multi'); if (!box) return;
+  const list = await V.list().catch(() => []);
+  // no wallets kept in Nought yet: say how multi-wallet works and offer to make some (an extension signs for one
+  // account at a time, so trades from several wallets use wallets kept in this browser)
+  if (!list.length) { box.innerHTML = `<div class="wm-mh"><b>Multi-wallet</b><span class="dim">trade from several wallets at once</span></div><p class="hint">${wallet.kind === 'external' ? 'Your extension signs for one account at a time, so multi-wallet trades use wallets kept in Nought: made or imported here, encrypted and sealed in this browser.' : 'Make or import wallets here; every trade then runs on the ones you tick.'}</p><div class="wm-madd"><button type="button" data-wa="new">Create wallets</button><button type="button" data-wa="import">Import</button></div>`; return; }
+  const sel = new Set(wallet.selected), n = tradeOwners().length, split = multiMode() === 'split';
+  const balOf = (a) => { const b = multiBal.get(a); return b && b.sol != null ? fmtSol(b.sol) : '…'; };
+  box.innerHTML = `<div class="wm-mh"><b>Trade with</b><span class="dim">${sel.size ? `${sel.size} of ${list.length} picked` : 'the active wallet only'}</span><span class="wm-grow"></span><button type="button" data-pickall>All</button><button type="button" data-picknone>None</button></div>
+    <div class="wm-mlist" role="group" aria-label="Wallets that trade together">${list.map((w) => `<label class="wm-mrow${sel.has(w.address) ? ' on' : ''}"><input type="checkbox" data-pick="${esc(w.address)}" ${sel.has(w.address) ? 'checked' : ''}><span class="nm">${esc(w.name || short(w.address))}</span><span class="mono dim">${esc(short(w.address))}</span><span class="mono">${balOf(w.address)} <span class="dim">SOL</span></span></label>`).join('')}</div>
+    <div class="wm-madd"><button type="button" data-wa="new">+ Add wallets</button><button type="button" data-wa="import">Import</button></div>
+    ${n > 1 ? `<div class="wm-mmode" role="group" aria-label="Buy amount with several wallets"><button type="button" data-mm="each" class="${split ? '' : 'on'}">Each wallet buys the amount</button><button type="button" data-mm="split" class="${split ? 'on' : ''}">Split the amount</button></div><p class="hint">Buys and sells go out from all ${n} wallets at the same moment.${split ? '' : ` A ${fmtSol(preset().buy)} SOL click spends ${fmtSol(preset().buy * n)} SOL in total.`}</p>` : ''}`;
+  for (const w of list) {
+    const b = multiBal.get(w.address); if (b && Date.now() - b.at < 30000) continue;
+    multiBal.set(w.address, { sol: b?.sol, at: Date.now() });
+    ju.balances(w.address).then((r) => { multiBal.set(w.address, { sol: Number(r.sol), at: Date.now() }); if (walletMenu?.isOpen()) renderMultiList(); }).catch(() => {});
+  }
+}
+async function onMultiClick(e) {
+  const t = e.target, pick = t.closest('[data-pick]'), mm = t.closest('[data-mm]');
+  try {
+    if (pick) selectWallet(pick.dataset.pick, pick.checked);
+    else if (mm) setMultiMode(mm.dataset.mm);
+    else if (t.closest('[data-picknone]')) for (const a of [...wallet.selected]) selectWallet(a, false);
+    else if (t.closest('[data-pickall]')) { for (const w of (await V.list()).slice(0, MAX_SELECTED)) if (!wallet.selected.includes(w.address)) selectWallet(w.address, true); }
+    else return false;
+  } catch (err) { toast(esc(err?.message || 'Could not change the wallet selection.'), 'err'); }
+  renderMultiList();
+  return true;
+}
 function onWalletMenu(e) {
+  if (e.target.closest('#wm-multi') && !e.target.closest('[data-wa]')) { if (e.target.closest('[data-pick], [data-mm], [data-pickall], [data-picknone]')) onMultiClick(e); return; }
   const b = e.target.closest('[data-wa]'); if (!b) return;
   const a = b.dataset.wa, owner = wallet.owner;
   walletMenu.close(true); // focus goes back to the pill, so a dialog opened next returns focus there
   const fail = (err) => toast(esc(err?.message || 'Could not open the wallet manager.'), 'err');
   if (a === 'manage') wui().then((w) => w.openWalletManager()).catch(fail);
+  else if (a === 'import') wui().then((w) => w.openWalletManager('import')).catch(fail);
+  else if (a === 'new') wui().then((w) => w.openWalletManager('new')).catch(fail);
   else if (a === 'deposit') wui().then((w) => w.openDeposit(owner)).catch(fail);
   else if (a === 'withdraw') wui().then((w) => w.openWithdraw(owner)).catch(fail);
   else if (a === 'convert') openConvert();
@@ -628,14 +627,39 @@ export function openSettings() {
 }
 
 // ---------------------------------------------------------------- status bar
-function dot(sel, state) { const el = $(sel); if (el) el.className = 'dot ' + state; }
+// Connections: the pump.fun stream, the Jupiter Pulse feed and the RPC each get a state ('live' | 'wait' | 'bad', ''
+// before the first check) and a line of text, shown in the connection panel; the pill sums them up.
+// A connection that has not been healthy yet counts as "Connecting" for its first 15 s (the stream reports "down" and
+// Jupiter "slow" while they start); after that, or once it was healthy and then dropped, it counts as it is.
+const conn = { pp: { s: '', t: '' }, jup: { s: '', t: '' }, rpc: { s: '', t: '' } }, BOOT_GRACE = 15000;
+const CONN = [['pp', 'Stream', '#feed-dot'], ['jup', 'Jupiter', '#dot-jup'], ['rpc', 'RPC', '#dot-rpc']];
+let connAt = 0;
+const connOk = (k) => conn[k].s === 'live' || (k === 'pp' && conn[k].s === 'wait');
+function setConn(k, state, text) {
+  connAt ||= Date.now();
+  conn[k] = { s: state, t: text, ever: conn[k].ever || state === 'live' || (k === 'pp' && state === 'wait') };
+  const [, , d] = CONN.find(([id]) => id === k), dl = $(d), tl = $(`#st-${k}-t`);
+  if (dl) dl.className = 'dot ' + state;
+  if (tl) tl.textContent = text;
+  connPill();
+}
+function connPill() {
+  const el = $('#st-conn'); if (!el) return;
+  // a connected but quiet launch stream still counts as healthy (the old bar called that "Live" too)
+  const boot = Date.now() - connAt < BOOT_GRACE, starting = (k) => !conn[k].s || (boot && !conn[k].ever && !connOk(k));
+  const ok = CONN.filter(([k]) => connOk(k)).length, rest = CONN.filter(([k]) => !connOk(k) && !starting(k)).map(([k]) => conn[k].s), bad = rest.filter((x) => x === 'bad').length;
+  const [state, label] = ok === CONN.length ? ['live', 'Live'] : bad === CONN.length ? ['bad', 'Offline'] : rest.length ? ['wait', 'Degraded'] : ['', 'Connecting'];
+  el.className = 'st-conn ' + state;
+  $('#st-conn-dot').className = 'dot ' + state;
+  $('#st-conn-l').textContent = label;
+  const sum = CONN.map(([k, name]) => `${name}: ${conn[k].s === 'live' ? 'live' : conn[k].s === 'bad' ? 'down' : conn[k].s === 'wait' ? 'slow or partial' : 'checking'}`).join(' · ');
+  el.title = sum; el.setAttribute('aria-label', `Connections ${label}. ${sum}. Open the details`);
+}
 function statusTick() {
   const now = Date.now(), sock = stream.ok && now - stream.lastMsg < 30000, rate = (stream.rate / 5).toFixed(1);
-  dot('#feed-dot', sock ? 'live' : stream.ok ? 'wait' : 'bad');
-  $('#st-pp').title = sock ? `pump.fun launch stream: live, ${rate} events/s` : stream.ok ? 'pump.fun launch stream: connected, quiet for 30 s' : 'pump.fun launch stream: reconnecting';
+  setConn('pp', sock ? 'live' : stream.ok ? 'wait' : 'bad', sock ? `pump.fun launch stream: live, ${rate} events/s` : stream.ok ? 'pump.fun launch stream: connected, quiet for 30 s' : 'pump.fun launch stream: reconnecting');
   const jLast = Math.max(feed.lastGems || 0, feed.lastRecent || 0), jOk = now - jLast < 20000, gecko = feed.source === 'geckoterminal';
-  dot('#dot-jup', jOk ? (gecko ? 'wait' : 'live') : feed.fails ? 'bad' : 'wait');
-  $('#st-jup').title = jOk ? (gecko ? 'Pulse feed: Jupiter is not answering, GeckoTerminal is filling in' : `Pulse feed: Jupiter, updated ${Math.round((now - jLast) / 1000)} s ago`) : feed.fails ? `Pulse feed: ${feed.error || 'Jupiter is not answering'}` : 'Pulse feed: starting';
+  setConn('jup', jOk ? (gecko ? 'wait' : 'live') : feed.fails ? 'bad' : 'wait', jOk ? (gecko ? 'Scope feed: Jupiter is not answering, GeckoTerminal is filling in' : `Scope feed: Jupiter, updated ${Math.round((now - jLast) / 1000)} s ago`) : feed.fails ? `Scope feed: ${feed.error || 'Jupiter is not answering'}` : 'Scope feed: starting');
   const live = sock || jOk;
   $('#feed-text').textContent = live ? `Live · pump.fun · ${tokens.size} coins${sock ? ` · ${rate} events/s` : ''}${gecko ? ' · GeckoTerminal fallback' : ''}` : stream.ok ? 'Connected, waiting for pump.fun…' : 'Reconnecting to pump.fun…';
   stream.rate = 0;
@@ -647,24 +671,46 @@ async function rpcTick(force = false) {
   const url = rpcUrl(), r = await probeRpc(url);
   rpcBusy = false;
   let host = url; try { host = new URL(url).host; } catch { /* keep */ }
-  dot('#dot-rpc', r.ok ? (r.ms > 1500 ? 'wait' : 'live') : 'bad');
-  $('#st-rpc').title = r.ok ? `RPC ${host}: ${r.ms} ms${settings.rpc ? '' : ' (default, with fallbacks)'}` : `RPC ${host}: ${r.error}. Nought falls back to the other public RPCs; pick one in Settings > Network.`;
+  setConn('rpc', r.ok ? (r.ms > 1500 ? 'wait' : 'live') : 'bad', r.ok ? `${host}: ${r.ms} ms${settings.rpc ? '' : ' (default, with fallbacks)'}` : `${host}: ${r.error}. Nought falls back to the other public RPCs; pick one in Settings > Network.`);
 }
+// the preset chip ("Preset 1", or the preset's own name once renamed) and its menu: pick P1–P3 or edit them
+let presetMenu = null;
+const presetLabel = (p, i) => (/^P[123]$/i.test(p.name) ? `Preset ${i + 1}` : p.name);
 function presetChip() {
   const p = preset(), el = $('#st-preset');
-  el.innerHTML = `<em>${esc(p.name)}</em> ${esc(String(p.buy))} SOL · ${esc(String(p.slippage))}% · ${esc(PRIO[p.prio]?.label || p.prio)}${p.mev === 'protected' ? ' · MEV' : ''}`;
-  el.setAttribute('aria-label', `Active preset ${p.name}: buy ${p.buy} SOL, slippage ${p.slippage}%, ${PRIO[p.prio]?.label || p.prio} priority${p.mev === 'protected' ? ', MEV-protected' : ''}. Edit presets`);
+  el.innerHTML = `${svg(IC.sliders, 13)}<span>${esc(presetLabel(p, settings.preset))}</span>`;
+  el.title = `${p.name}: buy ${p.buy} SOL · ${p.slippage}% slippage · ${PRIO[p.prio]?.label || p.prio}${p.mev === 'protected' ? ' · MEV-protected' : ''}`;
+  el.setAttribute('aria-label', `Active preset ${p.name}: buy ${p.buy} SOL, slippage ${p.slippage}%, ${PRIO[p.prio]?.label || p.prio} priority${p.mev === 'protected' ? ', MEV-protected' : ''}. Pick a preset`);
+  if (presetMenu?.isOpen()) renderPresetMenu();
+}
+function renderPresetMenu() {
+  const k = hotkeys();
+  $('#st-pre-menu').innerHTML = '<div class="st-ph">Trade preset</div>' + settings.presets.map((p, i) => {
+    const on = i === settings.preset, key = k['preset' + (i + 1)];
+    const named = !/^P[123]$/i.test(p.name);
+    return `<button type="button" role="menuitemradio" aria-checked="${on}" data-pick-preset="${i}"><span class="pn">P${i + 1}</span><span class="pd"><b>${named ? `<span class="pnm">${esc(p.name)}</span>` : ''}${esc(fmtSol(p.buy))} SOL</b><span>${esc(String(p.slippage))}% slippage · ${esc(PRIO[p.prio]?.label || p.prio)}${p.mev === 'protected' ? ' · MEV' : ''}</span></span>${on ? svg(IC.check, 14, 'ck') : key ? `<kbd>${esc(comboLabel(key))}</kbd>` : '<span></span>'}</button>`;
+  }).join('') + `<hr><button type="button" role="menuitem" class="pe" data-pedit-foot>${svg(IC.edit, 14)}<span>Edit presets</span></button>`;
 }
 // shown once there is something to show: "Saved 0 SOL" next to the 0% chip says nothing
-function savedChip() { const fs = savedFees(), el = $('#st-saved'); el.hidden = !(fs.trades > 0); el.textContent = `Saved ${fmtSol(fs.sol)} SOL in fees`; }
-// "SOL $120.13 · BTC $84,795 · ETH $2,694": SOL from price.js (util 'sol'), BTC and ETH from Hyperliquid (src/core/hl.js,
-// when present: allMids() → {COIN: mid}) every 15 s while visible
+// fees saved: the trades made in this browser, priced at each terminal's published fee (src/core/fee-compare.js)
+function savedChip() {
+  const fs = savedFees(), el = $('#st-saved'); el.hidden = !(fs.trades > 0); if (el.hidden) return;
+  const vol = fs.rate > 0 ? fs.sol / fs.rate : 0, list = savedVs(vol), ax = list[0];
+  // in dollars at today's SOL price (SOL until the price is known)
+  const px = solUsd() > 0 ? solUsd() : 0;
+  // the lowest published fee among them (Axiom's), so the figure never overstates
+  el.textContent = `Saved ${px ? usd(ax.sol * px, 2) : fmtSol(ax.sol) + ' SOL'} vs other terminals`;
+  el.title = `Fees these ${fs.trades} trade${fs.trades === 1 ? '' : 's'} (${fmtSol(vol)} SOL traded) would have cost elsewhere:\n` + list.map((t) => `${t.name} (${(t.rate * 100).toFixed(2).replace(/0$/, '')}%): ${px ? usd(t.sol * px, 2) + ' (' + fmtSol(t.sol) + ' SOL)' : fmtSol(t.sol) + ' SOL'}`).join('\n') + '\nNought: 0';
+}
+// BTC, ETH and SOL with a coin mark each: SOL from price.js (util 'sol'), BTC and ETH from Hyperliquid
+// (src/core/hl.js, when present: allMids() → {COIN: mid}) every 15 s while visible
 const mkts = { sol: 0, btc: 0, eth: 0 };
 function paintMarkets() {
-  const el = $('#st-mkts'), f = (n) => '$' + Math.round(n).toLocaleString('en-US');
-  const parts = [mkts.sol > 0 && `SOL <b>$${mkts.sol.toFixed(2)}</b>`, mkts.btc > 0 && `BTC <b>${f(mkts.btc)}</b>`, mkts.eth > 0 && `ETH <b>${f(mkts.eth)}</b>`].filter(Boolean);
-  el.innerHTML = parts.join('<i aria-hidden="true">·</i>'); el.hidden = !parts.length;
-  el.title = mkts.btc > 0 || mkts.eth > 0 ? 'SOL from Jupiter; BTC and ETH are Hyperliquid mid prices' : 'SOL price from Jupiter';
+  const el = $('#st-mkts');
+  const parts = [mkts.btc > 0 && `<span class="m-btc" title="Bitcoin, Hyperliquid mid price"><i class="cn btc" aria-hidden="true">₿</i><span class="sr-only">BTC </span>${usd(mkts.btc)}</span>`,
+    mkts.eth > 0 && `<span class="m-eth" title="Ether, Hyperliquid mid price"><i class="cn eth" aria-hidden="true">Ξ</i><span class="sr-only">ETH </span>$${Math.round(mkts.eth).toLocaleString('en-US')}</span>`,
+    mkts.sol > 0 && `<span class="m-sol" title="SOL, Jupiter price">${solIcon(13)}<span class="sr-only">SOL </span>$${mkts.sol.toFixed(2)}</span>`].filter(Boolean);
+  el.innerHTML = parts.join(''); el.hidden = !parts.length;
 }
 async function startMarkets() {
   let hl; try { hl = await import('../core/hl.js'); } catch { return; }
@@ -688,7 +734,7 @@ let started = false;
 // light that one instead there. aria-current follows the lit link.
 function markNav() {
   const vision = /^#\/track\/vision(?:$|[/?])/.test(location.hash);
-  if (vision) { $('#nav [data-tab="track"]')?.classList.remove('on'); $('#nav [data-tab="vision"]')?.classList.add('on'); }
+  if (vision && $('#nav [data-tab="vision"]')) { $('#nav [data-tab="track"]')?.classList.remove('on'); $('#nav [data-tab="vision"]')?.classList.add('on'); }
   for (const a of $$('#nav a[data-tab]')) { if (a.classList.contains('on')) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
 }
 
@@ -741,16 +787,22 @@ export function initShell() {
   part('wallet pill', () => {
     const wb = $('#wallet-btn');
     wb.addEventListener('click', (e) => { if (!wallet.owner) { e.stopImmediatePropagation(); openWalletPicker(); } }); // runs before the menu's own handler
-    walletMenu = popover(wb, $('#wallet-menu'), { menu: true, onOpen: renderWalletMenu });
-    $('#wallet-menu').addEventListener('click', onWalletMenu);
+    const wm = $('#wallet-menu'), sw = $('#st-wallet');
+    walletMenu = popover(wb, wm, { menu: true, onOpen: renderWalletMenu, onClose: () => { wm.classList.remove('at-foot'); wm.style.removeProperty('left'); } });
+    // the pill opens it under itself; the status bar chip opens it above the chip
+    window.addEventListener('pointerdown', (e) => { footWas = walletMenu.isOpen() && wm.classList.contains('at-foot') && sw.contains(e.target); }, true);
+    sw.addEventListener('click', openWalletFromFoot);
+    sw.addEventListener('keydown', (e) => { if (e.key === 'Escape' && walletMenu.isOpen()) { e.preventDefault(); walletMenu.close(); } });
+    wm.addEventListener('click', onWalletMenu);
+    $('#deposit-btn').addEventListener('click', () => wui().then((w) => w.openDeposit(wallet.owner)).catch((err) => toast(esc(err?.message || 'Could not open the wallet manager.'), 'err')));
     on('wallet', () => { walletUi(); refreshBalance(); if (walletMenu.isOpen()) renderWalletMenu(); });
     on('traded', () => { refreshBalance(); setTimeout(refreshBalance, 5000); savedChip(); });
     walletUi(); refreshBalance();
-    setInterval(() => { if (!hidden() && wallet.owner) refreshBalance(); }, 60000);
+    setInterval(() => { if (!hidden() && wallet.owner) refreshBalance(); }, 15000);
   });
 
   part('SOL price', () => {
-    const sp = () => { const p = Number(solUsd()); mkts.sol = p > 0 && isFinite(p) ? p : 0; paintMarkets(); };
+    const sp = () => { const p = Number(solUsd()); mkts.sol = p > 0 && isFinite(p) ? p : 0; paintMarkets(); try { savedChip(); } catch { /* the chip is optional */ } };
     on('sol', sp); sp();
   });
 
@@ -759,14 +811,21 @@ export function initShell() {
     const pr = $('#presets');
     const prUi = () => {
       pr.innerHTML = settings.presets.map((p, i) => `<button type="button" data-preset="${i}" aria-pressed="${i === settings.preset}" class="${i === settings.preset ? 'on' : ''}" title="${esc(p.name)}: buy ${esc(String(p.buy))} SOL · ${esc(String(p.slippage))}% slippage · ${esc(PRIO[p.prio]?.label || '')}${p.mev === 'protected' ? ' · MEV-protected' : ''}">${esc(p.name)}</button>`).join('')
-        + `<button type="button" class="pr-amt" data-pedit title="Quick-buy amount: click to edit presets">${esc(String(preset().buy))} SOL</button>`;
+        + `<button type="button" class="pr-amt" data-pedit title="Quick-buy amount: click to edit presets" aria-label="Quick-buy amount ${esc(String(preset().buy))} SOL: edit presets">${ICON.bolt}${esc(String(preset().buy))}<small>SOL</small></button>`;
       presetChip();
     };
     pr.addEventListener('click', (e) => { const b = e.target.closest('[data-preset]'); if (b) set({ preset: Number(b.dataset.preset) }); else if (e.target.closest('[data-pedit]')) openSettings(); });
     let lastRpc = settings.rpc;
     on('settings', () => { prUi(); if (settings.rpc !== lastRpc) { lastRpc = settings.rpc; rpcTick(true); } }); // re-check the RPC dot only when the RPC changed
     prUi();
-    $('#st-preset').addEventListener('click', openSettings);
+    // the status bar's preset chip: a menu to pick P1–P3, or open the editor
+    const pm = $('#st-pre-menu');
+    presetMenu = popover($('#st-preset'), pm, { menu: true, onOpen: renderPresetMenu });
+    pm.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-pick-preset]');
+      if (b) { const n = Number(b.dataset.pickPreset); presetMenu.close(); if (n >= 0 && n <= 2) set({ preset: n }); return; }
+      if (e.target.closest('[data-pedit-foot]')) { presetMenu.close(); openSettings(); }
+    });
   });
 
   // wallet picker (#wallets, filled by core wallet.js): an initial tile per row, and "Install ↗" as a link chip
@@ -785,7 +844,18 @@ export function initShell() {
     };
     new MutationObserver(deco).observe(list, { childList: true }); deco();
   });
-  part('search', () => $('#search-open').addEventListener('click', () => openSearch()));
+  part('search', () => {
+    const sb = $('#search-open'), tr = sb.parentElement;
+    sb.addEventListener('click', () => openSearch());
+    // Once the room the other top-bar items leave can't hold "Search" and the key (about 117 px), the pill becomes a
+    // round icon button (.icon-only) instead of an empty stretched pill. The room doesn't depend on the pill itself.
+    const fit = () => {
+      const kids = [...tr.children].filter((e) => e !== sb && e.offsetWidth > 0), gap = parseFloat(getComputedStyle(tr).columnGap) || 0;
+      sb.classList.toggle('icon-only', tr.clientWidth - kids.reduce((a, e) => a + e.offsetWidth, 0) - gap * kids.length < 117);
+    };
+    if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(fit); ro.observe(tr); for (const e of tr.children) if (e !== sb) ro.observe(e); }
+    fit();
+  });
   part('notifications', initAlerts);
   part('convert', () => {
     const cd = $('#convert-dlg');
@@ -795,19 +865,11 @@ export function initShell() {
     cd.addEventListener('close', () => { clearTimeout(cv.timer); cv.seq++; });
   });
 
-  // watchlist strip: drawn now, prices every 10 s, and at once whenever the watchlist changes (util 'watch' from
-  // src/core/watchlist.js, which also reports changes made in other tabs)
-  part('watchlist strip', () => {
-    syncTicker();
-    $('#ticker-toggle').addEventListener('click', () => toggleTicker());
-    $('#tk-hide').addEventListener('click', () => { toggleTicker(false); $('#ticker-toggle').focus(); });
-    on('watch', () => pollTicker());
-    pollTicker();
-    setInterval(pollTicker, 10000);
-    // backstop for code that writes LS 'watch' without the event: a cheap local comparison, no network
-    setInterval(() => { if (!tick.hidden && !hidden() && watchList().join(',') !== tick.key.split('|')[0]) pollTicker(); }, 3000);
-    let rs = 0; window.addEventListener('resize', () => { clearTimeout(rs); rs = setTimeout(() => renderTicker(true), 250); });
-    document.addEventListener('visibilitychange', () => { if (!hidden()) { pollTicker(); rpcTick(); } });
+  // the coin strip, and the recently viewed list it (and search) shows
+  part('recent coins', initRecent);
+  part('coin strip', () => {
+    initTicker();
+    document.addEventListener('visibilitychange', () => { if (!hidden()) rpcTick(); });
   });
 
   // live PnL widget: header button, menu item and key P. It reopens by itself after a reload when it was left open.
@@ -820,6 +882,14 @@ export function initShell() {
   part('hotkey titles', () => { keyTitles(); on('hotkeys', keyTitles); });
 
   part('status bar', () => {
+    const connPop = popover($('#st-conn'), $('#st-conn-pop'));
+    $('#st-conn-pop').addEventListener('click', (e) => { if (e.target.closest('a[href^="#"]')) connPop.close(false); });
+    $('.st-links').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-st]'); if (!b) return;
+      if (b.dataset.st === 'pnl') togglePnl();
+      else if (b.dataset.st === 'trackers') import('./trackpanel.js').then((m) => m.toggleTrackPanel()).catch(() => { location.hash = '#/track'; });
+      else if (b.dataset.st === 'wallets') wui().then((w) => w.openWalletManager()).catch((err) => toast(esc(err?.message || 'Could not open the wallet manager.'), 'err'));
+    });
     const repo = safeRepo();
     if (repo) { const a = $('#st-source'); a.href = repo; a.textContent = 'GitHub'; }
     statusTick(); setInterval(statusTick, 5000);
